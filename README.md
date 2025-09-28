@@ -201,24 +201,6 @@ finance-agent/
 - **Storage**: Key-value persistence for transactions and budgets
 - **Frontend**: Embedded HTML/CSS/JS served from the Worker
 
-## 🤝 **Contributing**
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📝 **License**
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 **Acknowledgments**
-
-- **Cloudflare**: For the amazing edge computing platform
-- **Meta**: For the Llama 3.3 language model
-- **Community**: For inspiration and feedback
-
 ## 🔗 **Links**
 
 - **Live Demo**: [https://finance-agent.aryaninus.workers.dev](https://finance-agent.aryaninus.workers.dev)
