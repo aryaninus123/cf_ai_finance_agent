@@ -1554,7 +1554,8 @@ function loadBudgetPerformance(categoryBreakdown, budgets) {
             category: category.charAt(0).toUpperCase() + category.slice(1),
             spent,
             budget,
-            percentage: Math.min(percentage, 100),
+            percentage: percentage, // Keep real percentage for status calculation
+            displayPercentage: Math.min(percentage, 100), // Capped for progress bar
             status: percentage > 100 ? 'over' : percentage > 90 ? 'warning' : 'good'
         };
     }).filter(item => item.spent > 0); // Only show categories with spending
@@ -1579,7 +1580,7 @@ function loadBudgetPerformance(categoryBreakdown, budgets) {
             </div>
             <div class="progress-container">
                 <div class="progress-bar">
-                    <div class="progress-fill \${item.status}" style="width: \${Math.min(item.percentage, 100)}%;"></div>
+                    <div class="progress-fill \${item.status}" style="width: \${item.displayPercentage}%;"></div>
                 </div>
                 <div class="progress-text">\${item.percentage.toFixed(1)}% used</div>
             </div>
