@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Personal Finance Assistant</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fas fa-chart-line"></i>
+                    <span>FinanceAI</span>
+                </div>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <h3>Overview</h3>
+                    <a href="#" class="nav-item active" data-section="chat">
+                        <i class="fas fa-comments"></i>
+                        <span>Chat Assistant</span>
+                    </a>
+                    <a href="#" class="nav-item" data-section="dashboard">
+                        <i class="fas fa-chart-pie"></i>
+                        <span>Dashboard</span>
+                    </a>
+                    <a href="#" class="nav-item" data-section="transactions">
+                        <i class="fas fa-exchange-alt"></i>
+                        <span>Transactions</span>
+                    </a>
+                    <a href="#" class="nav-item" data-section="budgets">
+                        <i class="fas fa-wallet"></i>
+                        <span>Budgets</span>
+                    </a>
+                </div>
+                
+                <div class="nav-section">
+                    <h3>Tools</h3>
+                    <a href="#" class="nav-item" data-section="insights">
+                        <i class="fas fa-lightbulb"></i>
+                        <span>Insights</span>
+                    </a>
+                    <a href="#" class="nav-item" data-section="settings">
+                        <i class="fas fa-cog"></i>
+                        <span>Settings</span>
+                    </a>
+                </div>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <div class="connection-status" id="connectionStatus">
+                    <i class="fas fa-circle"></i>
+                    <span>Connecting...</span>
+                </div>
+            </div>
+        </aside>
+        
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Chat Section -->
+            <section id="chat" class="content-section active">
+                <div class="chat-container">
+                    <div class="chat-header">
+                        <h1>Personal Finance Assistant</h1>
+                        <p>Ask me anything about your finances, expenses, or budgeting!</p>
+                    </div>
+                    
+                    <div class="chat-messages" id="chatMessages">
+                        <div class="message assistant">
+                            <div class="message-avatar">
+                                <i class="fas fa-robot"></i>
+                            </div>
+                            <div class="message-content">
+                                <p>Hello! I'm your personal finance assistant. I can help you:</p>
+                                <ul>
+                                    <li>Track your expenses and income</li>
+                                    <li>Set and monitor budgets</li>
+                                    <li>Provide financial insights and advice</li>
+                                    <li>Send alerts when you're overspending</li>
+                                </ul>
+                                <p>What would you like to do first?</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="chat-input-container">
+                        <div class="quick-actions">
+                            <button class="quick-action" data-action="add-expense">
+                                <i class="fas fa-minus-circle"></i>
+                                Add Expense
+                            </button>
+                            <button class="quick-action" data-action="add-income">
+                                <i class="fas fa-plus-circle"></i>
+                                Add Income
+                            </button>
+                            <button class="quick-action" data-action="view-summary">
+                                <i class="fas fa-chart-bar"></i>
+                                View Summary
+                            </button>
+                            <button class="quick-action" data-action="set-budget">
+                                <i class="fas fa-target"></i>
+                                Set Budget
+                            </button>
+                        </div>
+                        
+                        <div class="chat-input">
+                            <input type="text" id="messageInput" placeholder="Type your message or ask a question..." />
+                            <button id="sendButton">
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- Dashboard Section -->
+            <section id="dashboard" class="content-section">
+                <div class="dashboard-container">
+                    <h1>Financial Dashboard</h1>
+                    <div class="dashboard-grid">
+                        <div class="dashboard-card">
+                            <div class="card-header">
+                                <h3>Monthly Summary</h3>
+                                <i class="fas fa-calendar-alt"></i>
+                            </div>
+                            <div class="card-content">
+                                <div class="metric">
+                                    <span class="metric-label">Total Income</span>
+                                    <span class="metric-value income" id="totalIncome">$0.00</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Total Expenses</span>
+                                    <span class="metric-value expense" id="totalExpenses">$0.00</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Net Income</span>
+                                    <span class="metric-value" id="netIncome">$0.00</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="dashboard-card">
+                            <div class="card-header">
+                                <h3>Budget Status</h3>
+                                <i class="fas fa-bullseye"></i>
+                            </div>
+                            <div class="card-content" id="budgetStatus">
+                                <p class="no-data">No budgets set yet</p>
+                            </div>
+                        </div>
+                        
+                        <div class="dashboard-card">
+                            <div class="card-header">
+                                <h3>Recent Transactions</h3>
+                                <i class="fas fa-history"></i>
+                            </div>
+                            <div class="card-content" id="recentTransactions">
+                                <p class="no-data">No transactions yet</p>
+                            </div>
+                        </div>
+                        
+                        <div class="dashboard-card">
+                            <div class="card-header">
+                                <h3>Spending by Category</h3>
+                                <i class="fas fa-chart-pie"></i>
+                            </div>
+                            <div class="card-content" id="categoryBreakdown">
+                                <p class="no-data">No spending data yet</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- Other sections (transactions, budgets, etc.) -->
+            <section id="transactions" class="content-section">
+                <div class="section-container">
+                    <h1>Transaction History</h1>
+                    <div class="transaction-list" id="transactionList">
+                        <p class="no-data">No transactions to display</p>
+                    </div>
+                </div>
+            </section>
+            
+            <section id="budgets" class="content-section">
+                <div class="section-container">
+                    <h1>Budget Management</h1>
+                    <div class="budget-list" id="budgetList">
+                        <p class="no-data">No budgets configured</p>
+                    </div>
+                </div>
+            </section>
+            
+            <section id="insights" class="content-section">
+                <div class="section-container">
+                    <h1>Financial Insights</h1>
+                    <div class="insights-container" id="insightsContainer">
+                        <p class="no-data">Insights will appear here as you use the app</p>
+                    </div>
+                </div>
+            </section>
+            
+            <section id="settings" class="content-section">
+                <div class="section-container">
+                    <h1>Settings</h1>
+                    <div class="settings-form">
+                        <div class="form-group">
+                            <label for="currency">Preferred Currency</label>
+                            <select id="currency">
+                                <option value="USD">USD ($)</option>
+                                <option value="EUR">EUR (€)</option>
+                                <option value="GBP">GBP (£)</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="savingsGoal">Monthly Savings Goal</label>
+                            <input type="number" id="savingsGoal" placeholder="Enter amount">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="alertsEnabled" checked>
+                                Enable budget alerts
+                            </label>
+                        </div>
+                        
+                        <button class="btn primary" onclick="saveSettings()">Save Settings</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+        
+        <!-- Alerts Container -->
+        <div class="alerts-container" id="alertsContainer"></div>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>

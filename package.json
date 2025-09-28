@@ -1,0 +1,21 @@
+{
+  "name": "finance-agent",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "tsc",
+    "start": "wrangler dev --local",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["finance", "ai", "cloudflare", "agents"],
+  "author": "",
+  "license": "ISC",
+  "description": "AI-powered personal finance assistant built on Cloudflare Agents",
+  "dependencies": {
+    "@cloudflare/ai": "^1.2.2",
+    "agents": "^0.2.6",
+    "wrangler": "^4.40.2"
+  }
+}

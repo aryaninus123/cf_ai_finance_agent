@@ -1,0 +1,18 @@
+name = "finance-agent"
+main = "src/index.ts"
+compatibility_date = "2024-09-27"
+compatibility_flags = ["nodejs_compat"]
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "FinanceAgent"
+class_name = "FinanceAgent"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["FinanceAgent"]
+
+[vars]
+ENVIRONMENT = "development"
