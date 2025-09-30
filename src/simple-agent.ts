@@ -13,13 +13,158 @@ export class FinanceAgent {
   }
 
   private async ensureInitialized() {
-    // Using key-value storage - no initialization needed
-    // This method is kept for compatibility but does nothing
-    return;
+    // Check if we have transactions, if not, add sample data
+    const transactions = await this.state.storage.get('transactions') as any[];
+    if (!transactions || transactions.length === 0) {
+      // Add sample transactions for the last 6 months
+      const sampleTransactions = this.generateSampleTransactions();
+      await this.state.storage.put('transactions', sampleTransactions);
+    }
+  }
+
+  private generateSampleTransactions() {
+    const transactions = [];
+    const categories = ['food', 'transportation', 'housing', 'entertainment', 'shopping', 'healthcare'];
+    const descriptions: { [key: string]: string[] } = {
+      food: ['Grocery shopping', 'Restaurant dinner', 'Coffee shop', 'Fast food', 'Lunch'],
+      transportation: ['Gas station', 'Uber ride', 'Public transit', 'Car maintenance', 'Parking'],
+      housing: ['Rent', 'Utilities', 'Internet bill', 'Home supplies', 'Furniture'],
+      entertainment: ['Movie tickets', 'Concert', 'Streaming service', 'Gaming', 'Books'],
+      shopping: ['Clothing', 'Electronics', 'Home decor', 'Gifts', 'Online shopping'],
+      healthcare: ['Pharmacy', 'Doctor visit', 'Gym membership', 'Health insurance', 'Vitamins']
+    };
+    
+    // Budget targets per category (matching the default budgets)
+    const budgetTargets = {
+      food: 500,
+      transportation: 300,
+      housing: 1000,
+      entertainment: 200,
+      shopping: 300,
+      healthcare: 400
+    };
+    
+    // Generate transactions for last 3 months (more realistic starting balance)
+    const now = new Date();
+    for (let monthOffset = 2; monthOffset >= 0; monthOffset--) {
+      const month = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1);
+      const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+      
+      // Track spending per category this month to stay within budget
+      const monthlySpending: { [key: string]: number } = {
+        food: 0,
+        transportation: 0,
+        housing: 0,
+        entertainment: 0,
+        shopping: 0,
+        healthcare: 0
+      };
+      
+      // Add 12-18 transactions per month (more realistic)
+      const transactionCount = Math.floor(Math.random() * 7) + 12;
+      for (let i = 0; i < transactionCount; i++) {
+        const category = categories[Math.floor(Math.random() * categories.length)];
+        const day = Math.floor(Math.random() * daysInMonth) + 1;
+        const date = new Date(month.getFullYear(), month.getMonth(), day);
+        const dateStr = date.toISOString().split('T')[0];
+        
+        const descList = descriptions[category];
+        const description = descList[Math.floor(Math.random() * descList.length)];
+        
+        // Calculate amount - mix of on-track, near-limit, and over-budget scenarios
+        const budget = budgetTargets[category as keyof typeof budgetTargets] || 300;
+        const currentSpending = monthlySpending[category] || 0;
+        
+        // Create realistic scenarios:
+        // 50% chance: stay well under budget (60-85%)
+        // 30% chance: get close to budget (85-100%)
+        // 20% chance: go over budget (100-120%)
+        const rand = Math.random();
+        let targetSpending;
+        if (rand < 0.5) {
+          targetSpending = budget * (0.6 + Math.random() * 0.25); // 60-85%
+        } else if (rand < 0.8) {
+          targetSpending = budget * (0.85 + Math.random() * 0.15); // 85-100%
+        } else {
+          targetSpending = budget * (1.0 + Math.random() * 0.2); // 100-120% (over budget!)
+        }
+        
+        const remainingBudget = targetSpending - currentSpending;
+        
+        let amount;
+        if (remainingBudget <= 0) continue; // Skip if target reached
+        
+        // Generate realistic transaction amounts
+        if (category === 'housing') {
+          amount = Math.min(Math.floor(Math.random() * 300) + 100, remainingBudget);
+        } else if (category === 'food') {
+          amount = Math.min(Math.floor(Math.random() * 40) + 10, remainingBudget);
+        } else if (category === 'transportation') {
+          amount = Math.min(Math.floor(Math.random() * 50) + 10, remainingBudget);
+        } else if (category === 'entertainment') {
+          amount = Math.min(Math.floor(Math.random() * 40) + 10, remainingBudget);
+        } else if (category === 'shopping') {
+          amount = Math.min(Math.floor(Math.random() * 60) + 15, remainingBudget);
+        } else { // healthcare
+          amount = Math.min(Math.floor(Math.random() * 80) + 20, remainingBudget);
+        }
+        
+        monthlySpending[category] += amount;
+        
+        transactions.push({
+          id: crypto.randomUUID(),
+          amount: Math.round(amount * 100) / 100, // Round to 2 decimals
+          description,
+          category,
+          type: 'expense',
+          date: dateStr,
+          timestamp: date.getTime()
+        });
+      }
+      
+      // Add realistic monthly income - slightly more than total budget
+      // Total budget is ~$2700/month, so income should be ~$3000-3500
+      const day = 1; // Salary typically comes at start of month
+      const date = new Date(month.getFullYear(), month.getMonth(), day);
+      const dateStr = date.toISOString().split('T')[0];
+      
+      transactions.push({
+        id: crypto.randomUUID(),
+        amount: Math.floor(Math.random() * 500) + 3000, // $3000-$3500
+        description: 'Monthly Salary',
+        category: 'income',
+        type: 'income',
+        date: dateStr,
+        timestamp: date.getTime()
+      });
+      
+      // Occasionally add side income (30% chance)
+      if (Math.random() < 0.3) {
+        const sideDay = Math.floor(Math.random() * daysInMonth) + 1;
+        const sideDate = new Date(month.getFullYear(), month.getMonth(), sideDay);
+        const sideDateStr = sideDate.toISOString().split('T')[0];
+        
+        transactions.push({
+          id: crypto.randomUUID(),
+          amount: Math.floor(Math.random() * 300) + 100, // $100-$400
+          description: 'Freelance work',
+          category: 'income',
+          type: 'income',
+          date: sideDateStr,
+          timestamp: sideDate.getTime()
+        });
+      }
+    }
+    
+    // Sort by date
+    return transactions.sort((a, b) => a.timestamp - b.timestamp);
   }
 
 
   async fetch(request: Request): Promise<Response> {
+    // Ensure we have sample data on first request
+    await this.ensureInitialized();
+    
     const url = new URL(request.url);
     
     // Serve the main HTML page
@@ -50,6 +195,15 @@ export class FinanceAgent {
       return this.getSummary(request);
     }
     
+    // Reset data endpoint (for clearing old sample data)
+    if (url.pathname === '/api/reset-data' && request.method === 'POST') {
+      await this.state.storage.deleteAll();
+      await this.ensureInitialized();
+      return new Response(JSON.stringify({ success: true, message: 'Data reset with new sample transactions' }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
     if (url.pathname === '/api/set-budget' && request.method === 'POST') {
       return this.setBudget(request);
     }
@@ -57,7 +211,12 @@ export class FinanceAgent {
     if (url.pathname === '/api/get-budgets') {
       return this.getBudgets(request);
     }
-    
+
+    // LLM-powered receipt scanning endpoint
+    if (url.pathname === '/api/scan-receipt' && request.method === 'POST') {
+      return this.scanReceiptLLM(request);
+    }
+
     return new Response('Not Found', { status: 404 });
   }
 
@@ -83,7 +242,7 @@ export class FinanceAgent {
                 <div class="logo">
                     <h2>💰 Finance AI</h2>
                 </div>
-                <button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()">×</button>
+                <button class="sidebar-toggle" id="sidebarToggle">×</button>
             </div>
             
             <div class="dashboard-section">
@@ -105,15 +264,15 @@ export class FinanceAgent {
 
         <div class="main-content">
             <!-- Dashboard Toggle Button (hidden by default) -->
-            <button class="show-dashboard-btn" id="showDashboardBtn" onclick="toggleSidebar()" style="display: none;">
+            <button class="show-dashboard-btn" id="showDashboardBtn" style="display: none;">
                 📊 Dashboard
             </button>
             
             <!-- Tab Navigation -->
             <div class="tab-navigation">
-                <button class="tab-btn active" onclick="switchTab('chat')">💬 AI Assistant</button>
-                <button class="tab-btn" onclick="switchTab('budget')">📊 Budget Manager</button>
-                <button class="tab-btn" onclick="switchTab('analytics')">📈 Analytics</button>
+                <button class="tab-btn active">💬 AI Assistant</button>
+                <button class="tab-btn">📊 Budget Manager</button>
+                <button class="tab-btn">📈 Analytics</button>
             </div>
 
             <!-- Chat Tab -->
@@ -140,10 +299,10 @@ export class FinanceAgent {
                 </div>
                 
                 <div class="suggestion-chips">
-                    <button class="chip" onclick="sendSuggestion('Add expense')">Add Expense</button>
-                    <button class="chip" onclick="sendSuggestion('Set budget')">Set Budget</button>
-                    <button class="chip" onclick="sendSuggestion('Financial advice')">Get Advice</button>
-                    <button class="chip" onclick="sendSuggestion('Investment tips')">Investment Tips</button>
+                    <button class="chip">Add Expense</button>
+                    <button class="chip">Set Budget</button>
+                    <button class="chip">Get Advice</button>
+                    <button class="chip">Investment Tips</button>
                 </div>
                 
                     <div class="chat-input-container">
@@ -162,35 +321,73 @@ export class FinanceAgent {
                     </div>
 
                     <div class="budget-controls">
-                        <div class="add-transaction-form">
-                            <h3>Add New Transaction</h3>
-                            <div class="form-row">
-                                <input type="number" id="amountInput" placeholder="Amount" step="0.01">
-                                <input type="text" id="descriptionInput" placeholder="Description">
-                                <select id="categoryInput">
-                                    <option value="food">🍕 Food</option>
-                                    <option value="transportation">🚗 Transportation</option>
-                                    <option value="housing">🏠 Housing</option>
-                                    <option value="entertainment">🎬 Entertainment</option>
-                                    <option value="shopping">🛍️ Shopping</option>
-                                    <option value="healthcare">🏥 Healthcare</option>
-                                    <option value="other">📦 Other</option>
-                                </select>
-                                <select id="typeInput">
-                                    <option value="expense">💸 Expense</option>
-                                    <option value="income">💰 Income</option>
-                                </select>
-                                <input type="date" id="dateInput" value="">
-                                <button id="addTransactionBtn">Add</button>
+                        <div class="input-tabs" style="display:flex;gap:.5rem;margin:0 0 1rem 0;">
+                            <button id="tabManual" class="input-tab-btn" style="background:#667eea;color:#fff;border:1px solid #667eea;padding:.6rem 1rem;border-radius:8px;cursor:pointer;">Add Transaction</button>
+                            <button id="tabScan" class="input-tab-btn" style="background:rgba(0,0,0,0.05);color:#2d3748;border:1px solid rgba(0,0,0,0.1);padding:.6rem 1rem;border-radius:8px;cursor:pointer;">Scan Receipt</button>
+                        </div>
+
+                        <div id="manualSection" class="input-section" style="display:block;">
+                            <div class="add-transaction-form">
+                                <h3>Add New Transaction</h3>
+                                <div class="form-row">
+                                    <input type="number" id="amountInput" placeholder="Amount" step="0.01">
+                                    <input type="text" id="descriptionInput" placeholder="Description">
+                                    <select id="categoryInput">
+                                        <option value="food">🍕 Food</option>
+                                        <option value="transportation">🚗 Transportation</option>
+                                        <option value="housing">🏠 Housing</option>
+                                        <option value="entertainment">🎬 Entertainment</option>
+                                        <option value="shopping">🛍️ Shopping</option>
+                                        <option value="healthcare">🏥 Healthcare</option>
+                                        <option value="other">📦 Other</option>
+                                    </select>
+                                    <select id="typeInput">
+                                        <option value="expense">💸 Expense</option>
+                                        <option value="income">💰 Income</option>
+                                    </select>
+                                    <input type="date" id="dateInput" value="">
+                                    <button id="addTransactionBtn">Add</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="scanSection" class="input-section" style="display:none;">
+                            <!-- Scan Receipt -->
+                            <div class="scan-receipt-form">
+                                <h3>Scan Receipt (LLM)</h3>
+                                <div class="form-row" style="gap: 1rem; align-items: center;">
+                                    <label for="scanFile" class="file-upload-label">
+                                        <span class="file-upload-text">Choose File</span>
+                                        <span id="fileName" class="file-name"></span>
+                                    </label>
+                                    <input type="file" id="scanFile" accept="image/*" style="display: none;">
+                                    <button id="scanBtn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">Scan</button>
+                                    <span id="scanStatus" class="scan-status"></span>
+                                </div>
+                                <div class="form-row">
+                                    <input type="number" id="scanAmount" placeholder="Amount" step="0.01">
+                                    <input type="text" id="scanMerchant" placeholder="Merchant">
+                                    <select id="scanCategory">
+                                        <option value="food">Food</option>
+                                        <option value="transportation">Transportation</option>
+                                        <option value="housing">Housing</option>
+                                        <option value="entertainment">Entertainment</option>
+                                        <option value="shopping">Shopping</option>
+                                        <option value="healthcare">Healthcare</option>
+                                        <option value="other">Other</option>
+                                    </select>
+                                    <input type="date" id="scanDate" value="">
+                                    <button id="addScannedBtn">Add</button>
+                                </div>
                             </div>
                         </div>
                     </div>
 
                     <div class="budget-overview">
                         <div class="monthly-selector">
-                            <button onclick="changeMonth(-1)">‹</button>
+                            <button>‹</button>
                             <span id="currentMonth">September 2025</span>
-                            <button onclick="changeMonth(1)">›</button>
+                            <button>›</button>
                         </div>
                         
                         <div class="category-budgets" id="categoryBudgets">
@@ -738,6 +935,38 @@ body {
     box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
+.file-upload-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 12px 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+
+.file-upload-label:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+.file-upload-text {
+    font-weight: 600;
+}
+
+.file-name {
+    font-size: 0.9rem;
+    opacity: 0.9;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .form-row button {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
@@ -1143,7 +1372,7 @@ let currentYear = new Date().getFullYear();
 let allTransactions = [];
 
 // Tab Management
-function switchTab(tabName) {
+function switchTab(clickedBtn, tabName) {
     // Hide all tabs
     document.querySelectorAll('.tab-content').forEach(tab => {
         tab.classList.remove('active');
@@ -1158,7 +1387,7 @@ function switchTab(tabName) {
     document.getElementById(tabName + 'Tab').classList.add('active');
     
     // Add active class to clicked button
-    event.target.classList.add('active');
+    if (clickedBtn) clickedBtn.classList.add('active');
     
     // Handle sidebar visibility based on tab
     const sidebar = document.getElementById('sidebar');
@@ -1260,8 +1489,11 @@ async function loadBudgetData() {
         // Update monthly selector
         updateMonthlySelector();
         
-        // Load category budgets
-        await loadCategoryBudgets(data.categoryBreakdown);
+        // Filter transactions for current month and calculate category breakdown
+        const monthlyBreakdown = calculateMonthlyBreakdown(currentMonth, currentYear);
+        
+        // Load category budgets with monthly data
+        await loadCategoryBudgets(monthlyBreakdown);
         
         // Load transactions list
         loadTransactionsList();
@@ -1271,12 +1503,26 @@ async function loadBudgetData() {
     }
 }
 
+function calculateMonthlyBreakdown(month, year) {
+    const breakdown = {};
+    allTransactions.forEach(transaction => {
+        if (transaction.type === 'expense') {
+            const txDate = new Date(transaction.date || transaction.timestamp);
+            if (txDate.getMonth() === month && txDate.getFullYear() === year) {
+                const category = transaction.category;
+                breakdown[category] = (breakdown[category] || 0) + transaction.amount;
+            }
+        }
+    });
+    return breakdown;
+}
+
 function updateMonthlySelector() {
     const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
         'July', 'August', 'September', 'October', 'November', 'December'];
     
     document.getElementById('currentMonth').textContent = 
-        \`\${monthNames[currentMonth]} \${currentYear}\`;
+        monthNames[currentMonth] + ' ' + currentYear;
 }
 
 function changeMonth(direction) {
@@ -1289,6 +1535,12 @@ function changeMonth(direction) {
         currentYear--;
     }
     updateMonthlySelector();
+    
+    // Recalculate monthly breakdown and update budgets
+    const monthlyBreakdown = calculateMonthlyBreakdown(currentMonth, currentYear);
+    loadCategoryBudgets(monthlyBreakdown);
+    
+    // Update transactions list
     loadTransactionsList();
 }
 
@@ -1321,36 +1573,46 @@ async function loadCategoryBudgets(categoryBreakdown) {
     container.innerHTML = categories.map(cat => {
         const spent = categoryBreakdown[cat.name] || 0;
         const budget = budgets[cat.name] || 500;
-        const percentage = Math.min((spent / budget) * 100, 100);
+        const percentage = (spent / budget) * 100; // Don't cap for status calculation
+        const displayPercentage = Math.min(percentage, 100); // Cap for progress bar only
+        const status = percentage > 100 ? '🚨 Over budget' : percentage > 90 ? '⚠️ Near limit' : '✅ On track';
         
-        return \`
-            <div class="budget-card" data-category="\${cat.name}">
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
-                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                        <span style="font-size: 1.5rem;">\${cat.emoji}</span>
-                        <h4 style="margin: 0;">\${cat.label}</h4>
-                    </div>
-                    <button class="edit-budget-btn" onclick="editBudget('\${cat.name}', \${budget})" style="background: rgba(255,255,255,0.2); border: none; border-radius: 50%; width: 36px; height: 36px; color: white; cursor: pointer; font-size: 1.1rem; transition: all 0.2s ease; display: flex; align-items: center; justify-content: center;">⚙️</button>
-                </div>
-                <div style="margin-bottom: 0.5rem;">
-                    <div style="display: flex; justify-content: space-between;">
-                        <span>$\${spent.toFixed(2)}</span>
-                        <span id="budget-\${cat.name}">/ $\${budget.toFixed(2)}</span>
-                    </div>
-                    <div style="background: rgba(255,255,255,0.3); height: 8px; border-radius: 4px; margin-top: 0.5rem;">
-                        <div style="background: white; height: 100%; width: \${percentage}%; border-radius: 4px; transition: width 0.5s ease;"></div>
-                    </div>
-                </div>
-                <div style="font-size: 0.9rem; opacity: 0.9;">
-                    \${percentage > 90 ? '⚠️ Near limit' : percentage > 100 ? '🚨 Over budget' : '✅ On track'}
-                </div>
-            </div>
-        \`;
+        return '<div class="budget-card" data-category="' + cat.name + '">' +
+            '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">' +
+                '<div style="display: flex; align-items: center; gap: 0.5rem;">' +
+                    '<span style="font-size: 1.5rem;">' + cat.emoji + '</span>' +
+                    '<h4 style="margin: 0;">' + cat.label + '</h4>' +
+                '</div>' +
+                '<button class="edit-budget-btn" data-category="' + cat.name + '" data-budget="' + budget + '" style="background: rgba(255,255,255,0.2); border: none; border-radius: 50%; width: 36px; height: 36px; color: white; cursor: pointer; font-size: 1.1rem; transition: all 0.2s ease; display: flex; align-items: center; justify-content: center;">⚙️</button>' +
+            '</div>' +
+            '<div style="margin-bottom: 0.5rem;">' +
+                '<div style="display: flex; justify-content: space-between;">' +
+                    '<span>$' + spent.toFixed(2) + '</span>' +
+                    '<span id="budget-' + cat.name + '">/ $' + budget.toFixed(2) + '</span>' +
+                '</div>' +
+                '<div style="background: rgba(255,255,255,0.3); height: 8px; border-radius: 4px; margin-top: 0.5rem;">' +
+                    '<div style="background: white; height: 100%; width: ' + displayPercentage + '%; border-radius: 4px; transition: width 0.5s ease;"></div>' +
+                '</div>' +
+            '</div>' +
+            '<div style="font-size: 0.9rem; opacity: 0.9;">' + status + '</div>' +
+        '</div>';
     }).join('');
+    
+    // Add event listeners to edit buttons
+    setTimeout(() => {
+        document.querySelectorAll('.edit-budget-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const category = this.dataset.category;
+                const currentBudget = parseFloat(this.dataset.budget);
+                editBudget(category, currentBudget);
+            });
+        });
+    }, 100);
 }
 
 async function editBudget(category, currentBudget) {
-    const newBudget = prompt(\`Set budget for \${category.charAt(0).toUpperCase() + category.slice(1)}:\`, currentBudget);
+    const categoryName = category.charAt(0).toUpperCase() + category.slice(1);
+    const newBudget = prompt('Set budget for ' + categoryName + ':', currentBudget);
     
     if (newBudget === null || newBudget === '') return; // User cancelled
     
@@ -1376,7 +1638,7 @@ async function editBudget(category, currentBudget) {
         
         if (response.ok) {
             // Update the UI immediately
-            document.getElementById(\`budget-\${category}\`).textContent = \`/ $\${budgetAmount.toFixed(2)}\`;
+            document.getElementById('budget-' + category).textContent = '/ $' + budgetAmount.toFixed(2);
             
             // Reload the budget data to update progress bars
             await loadBudgetData();
@@ -1469,12 +1731,11 @@ function loadCategoryAnalytics(categoryBreakdown) {
         .sort(([,a], [,b]) => b - a)
         .map(([category, amount]) => {
             const percentage = total > 0 ? ((amount / total) * 100).toFixed(1) : 0;
-            return \`
-                <div class="category-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(102, 126, 234, 0.1); border-radius: 8px; margin-bottom: 8px;">
-                    <span style="text-transform: capitalize; font-weight: 600; color: #2d3748;">\${category}</span>
-                    <span style="font-weight: 600; color: #4a5568;">$\${amount.toFixed(2)} (\${percentage}%)</span>
-                </div>
-            \`;
+            const capitalizedCategory = category.charAt(0).toUpperCase() + category.slice(1);
+            return '<div class="category-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(102, 126, 234, 0.1); border-radius: 8px; margin-bottom: 8px;">' +
+                '<span style="text-transform: capitalize; font-weight: 600; color: #2d3748;">' + capitalizedCategory + '</span>' +
+                '<span style="font-weight: 600; color: #4a5568;">$' + amount.toFixed(2) + ' (' + percentage + '%)</span>' +
+            '</div>';
         }).join('');
 }
 
@@ -1488,7 +1749,7 @@ function loadMonthlySpendingTrend(transactions, showSampleData = false) {
     // Initialize last 6 months
     for (let i = 5; i >= 0; i--) {
         const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const monthKey = \`\${date.getFullYear()}-\${String(date.getMonth() + 1).padStart(2, '0')}\`;
+        const monthKey = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
         const monthName = date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
         monthlyData[monthKey] = { name: monthName, amount: 0 };
     }
@@ -1508,7 +1769,7 @@ function loadMonthlySpendingTrend(transactions, showSampleData = false) {
     transactions.forEach(transaction => {
         if (transaction.type === 'expense') {
             const date = new Date(transaction.timestamp);
-            const monthKey = \`\${date.getFullYear()}-\${String(date.getMonth() + 1).padStart(2, '0')}\`;
+            const monthKey = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
             if (monthlyData[monthKey]) {
                 monthlyData[monthKey].amount += transaction.amount;
             }
@@ -1518,27 +1779,27 @@ function loadMonthlySpendingTrend(transactions, showSampleData = false) {
     const monthlyValues = Object.values(monthlyData);
     const maxAmount = Math.max(...monthlyValues.map(m => m.amount));
     
-    container.innerHTML = \`
-        <div style="display: flex; flex-direction: column; height: 250px; width: 100%; padding: 15px; box-sizing: border-box;">
-            <div style="display: flex; align-items: end; height: 180px; gap: 12px; margin-bottom: 15px; justify-content: space-between;">
-                \${monthlyValues.map(month => {
+    const chartBars = monthlyValues.map(month => {
                     const height = maxAmount > 0 ? (month.amount / maxAmount) * 140 : 5;
-                    return \`
-                        <div style="display: flex; flex-direction: column; align-items: center; min-width: 60px; flex: 1; max-width: 80px;">
-                            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); width: 100%; height: \${height}px; border-radius: 6px 6px 0 0; margin-bottom: 8px; position: relative; box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);">
-                                <div style="position: absolute; top: -30px; left: 50%; transform: translateX(-50%); font-size: 0.75rem; color: #4a5568; font-weight: 700; white-space: nowrap;">$\${month.amount.toFixed(0)}</div>
-                            </div>
-                            <div style="font-size: 0.7rem; color: #718096; text-align: center; font-weight: 500; line-height: 1.2;">\${month.name}</div>
-                        </div>
-                    \`;
-                }).join('')}
-            </div>
-            <div style="text-align: center; color: #4a5568; font-size: 0.85rem; background: rgba(102, 126, 234, 0.1); padding: 8px 16px; border-radius: 20px; font-weight: 500;">
-                💡 \${monthlyValues[monthlyValues.length - 1].amount > monthlyValues[monthlyValues.length - 2].amount ? 
-                    'Spending increased this month' : 'Spending decreased this month'}
-            </div>
-        </div>
-    \`;
+        return '<div style="display: flex; flex-direction: column; align-items: center; min-width: 60px; flex: 1; max-width: 80px;">' +
+            '<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); width: 100%; height: ' + height + 'px; border-radius: 6px 6px 0 0; margin-bottom: 8px; position: relative; box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);">' +
+                '<div style="position: absolute; top: -30px; left: 50%; transform: translateX(-50%); font-size: 0.75rem; color: #4a5568; font-weight: 700; white-space: nowrap;">$' + month.amount.toFixed(0) + '</div>' +
+            '</div>' +
+            '<div style="font-size: 0.7rem; color: #718096; text-align: center; font-weight: 500; line-height: 1.2;">' + month.name + '</div>' +
+        '</div>';
+    }).join('');
+    
+    const trendMessage = monthlyValues[monthlyValues.length - 1].amount > monthlyValues[monthlyValues.length - 2].amount ? 
+        'Spending increased this month' : 'Spending decreased this month';
+    
+    container.innerHTML = '<div style="display: flex; flex-direction: column; height: 250px; width: 100%; padding: 15px; box-sizing: border-box;">' +
+        '<div style="display: flex; align-items: end; height: 180px; gap: 12px; margin-bottom: 15px; justify-content: space-between;">' +
+            chartBars +
+        '</div>' +
+        '<div style="text-align: center; color: #4a5568; font-size: 0.85rem; background: rgba(102, 126, 234, 0.1); padding: 8px 16px; border-radius: 20px; font-weight: 500;">' +
+            '💡 ' + trendMessage +
+        '</div>' +
+    '</div>';
 }
 
 function loadBudgetPerformance(categoryBreakdown, budgets) {
@@ -1597,37 +1858,31 @@ async function loadAIInsights(data) {
     
     // Generate AI insights based on data
     try {
+        const breakdownStr = JSON.stringify(data.categoryBreakdown);
+        const messageText = 'Analyze my financial data and provide 3 specific actionable recommendations. Balance: $' + data.balance.toFixed(2) + ', Total expenses: $' + data.totalExpenses.toFixed(2) + ', Total income: $' + data.totalIncome.toFixed(2) + ', Spending breakdown: ' + breakdownStr;
+        
         const response = await fetch('/api/advice', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                message: \`Analyze my financial data and provide insights. I have a balance of $\${data.balance}, total expenses of $\${data.totalExpenses}, total income of $\${data.totalIncome}, and my spending breakdown is: \${JSON.stringify(data.categoryBreakdown)}. Give me 3 specific actionable recommendations.\`
+                message: messageText
             })
         });
         
         const result = await response.json();
-        container.innerHTML = \`<p>\${result.response}</p>\`;
+        container.innerHTML = '<p>' + (result.response || result.advice || 'No insights available') + '</p>';
     } catch (error) {
+        console.error('AI Insights error:', error);
         container.innerHTML = '<p>💡 Based on your spending patterns, consider setting monthly budgets for each category and tracking your progress regularly.</p>';
     }
 }
 
 function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
-    notification.style.cssText = \`
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        padding: 1rem 1.5rem;
-        background: \${type === 'success' ? '#48bb78' : type === 'error' ? '#f56565' : '#667eea'};
-        color: white;
-        border-radius: 10px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-        z-index: 1000;
-        animation: slideIn 0.3s ease;
-    \`;
+    const bgColor = type === 'success' ? '#48bb78' : type === 'error' ? '#f56565' : '#667eea';
+    notification.style.cssText = 'position: fixed; top: 20px; right: 20px; padding: 1rem 1.5rem; background: ' + bgColor + '; color: white; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); z-index: 1000; animation: slideIn 0.3s ease;';
     
     notification.textContent = message;
     document.body.appendChild(notification);
@@ -1781,6 +2036,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const chatInput = document.getElementById('chatInput');
     const sendButton = document.getElementById('sendButton');
     
+    if (sendButton && chatInput) {
     sendButton.addEventListener('click', () => {
         const message = chatInput.value;
         if (message.trim()) {
@@ -1788,7 +2044,9 @@ document.addEventListener('DOMContentLoaded', function() {
             chatInput.value = '';
         }
     });
+    }
     
+    if (chatInput) {
     chatInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             const message = chatInput.value;
@@ -1798,6 +2056,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     });
+    }
     
     // Budget tab event listeners
     const addTransactionBtn = document.getElementById('addTransactionBtn');
@@ -1821,7 +2080,191 @@ document.addEventListener('DOMContentLoaded', function() {
     if (typeFilter) {
         typeFilter.addEventListener('change', loadTransactionsList);
     }
-});`;
+
+    // Scan receipt event listeners
+    const scanFileInput = document.getElementById('scanFile');
+    const fileNameSpan = document.getElementById('fileName');
+    if (scanFileInput && fileNameSpan) {
+        scanFileInput.addEventListener('change', (e) => {
+            const file = e.target.files && e.target.files[0];
+            if (file) {
+                fileNameSpan.textContent = file.name;
+            }
+        });
+    }
+    
+    const scanBtn = document.getElementById('scanBtn');
+    if (scanBtn) scanBtn.addEventListener('click', scanReceiptFromFile);
+    const addScannedBtn = document.getElementById('addScannedBtn');
+    if (addScannedBtn) addScannedBtn.addEventListener('click', addScannedTransaction);
+    
+    // Tab navigation
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const tabName = this.textContent.includes('AI') ? 'chat' : 
+                           this.textContent.includes('Budget') ? 'budget' : 'analytics';
+            switchTab(this, tabName);
+        });
+    });
+    
+    // Sidebar toggle
+    const sidebarToggle = document.getElementById('sidebarToggle');
+    if (sidebarToggle) sidebarToggle.addEventListener('click', toggleSidebar);
+    const showDashboardBtn = document.getElementById('showDashboardBtn');
+    if (showDashboardBtn) showDashboardBtn.addEventListener('click', toggleSidebar);
+    
+    // Suggestion chips
+    document.querySelectorAll('.chip').forEach(chip => {
+        chip.addEventListener('click', function() {
+            const text = this.textContent.trim();
+            sendSuggestion(text);
+        });
+    });
+    
+    // Input section tabs
+    const tabManual = document.getElementById('tabManual');
+    const tabScan = document.getElementById('tabScan');
+    if (tabManual) tabManual.addEventListener('click', () => switchInputSection('manual'));
+    if (tabScan) tabScan.addEventListener('click', () => switchInputSection('scan'));
+    
+    // Monthly navigation
+    const monthlySelector = document.querySelector('.monthly-selector');
+    if (monthlySelector) {
+        const prevBtn = monthlySelector.querySelector('button:first-child');
+        const nextBtn = monthlySelector.querySelector('button:last-child');
+        if (prevBtn) prevBtn.addEventListener('click', () => changeMonth(-1));
+        if (nextBtn) nextBtn.addEventListener('click', () => changeMonth(1));
+    }
+});
+
+// ===== Scan Receipt (LLM) helpers =====
+function fileToDataURL(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+async function scanReceiptFromFile() {
+    const status = document.getElementById('scanStatus');
+    const input = document.getElementById('scanFile');
+    const file = input && input.files && input.files[0];
+    if (!file) { alert('Choose an image'); return; }
+    try {
+        if (status) status.textContent = 'Analyzing…';
+        const dataURL = await fileToDataURL(file);
+        const response = await fetch('/api/scan-receipt', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: dataURL, filename: file.name })
+        });
+        const res = await response.json();
+        if (!response.ok || !res.success) throw new Error(res?.error || 'Scan failed');
+
+        // Client-side sanitation/fallbacks
+        let outAmount = res.amount;
+        let outMerchant = (typeof res.merchant === 'string') ? res.merchant : '';
+        let outDate = res.date;
+        if (!outMerchant || (outMerchant.trim().startsWith('{') && res.raw_text)) {
+            outMerchant = clientMerchantFromText(res.raw_text || '');
+        }
+        if ((!outAmount || outAmount < 5) && res.raw_text) {
+            const cand = clientBestTotalFromText(res.raw_text);
+            if (!isNaN(cand)) outAmount = Number(cand.toFixed(2));
+        }
+
+        document.getElementById('scanAmount').value = outAmount ?? '';
+        document.getElementById('scanMerchant').value = outMerchant ?? '';
+        document.getElementById('scanCategory').value = res.category ?? 'other';
+        document.getElementById('scanDate').value = outDate ?? new Date().toISOString().slice(0,10);
+        status.textContent = res.note || 'Parsed';
+    } catch (e) {
+        if (status) status.textContent = 'Error';
+        alert('Scan failed: ' + (e?.message || e));
+    }
+}
+
+function clientBestTotalFromText(text) {
+    const cands = [];
+    const push = (n, s) => { if (!isNaN(n)) cands.push({ n, s }); };
+    let m;
+    const reLbl1 = /([A-Za-z ]{0,20})[: ]*([€$£]?\s*\d{1,3}(?:[.,]\d{3})*[.,]\d{2})/gi;
+    while ((m = reLbl1.exec(text)) !== null) {
+        const lbl = (m[1] || '').toLowerCase();
+        const n = parseFloat(m[2].replace(/[, ]/g,'.').replace(/[^0-9.]/g,''));
+        let s = 0; if (/grand\s*total|total\b/.test(lbl)) s+=4; if (/subtotal/.test(lbl)) s+=2; if (/tax|vat|tip/.test(lbl)) s-=3; push(n,s);
+    }
+    const reLbl2 = /([€$£]?\s*\d{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*([A-Za-z ]{0,20})/gi;
+    while ((m = reLbl2.exec(text)) !== null) {
+        const lbl = (m[2] || '').toLowerCase();
+        const n = parseFloat(m[1].replace(/[, ]/g,'.').replace(/[^0-9.]/g,''));
+        let s = 0; if (/grand\s*total|total\b/.test(lbl)) s+=4; if (/subtotal/.test(lbl)) s+=2; if (/tax|vat|tip/.test(lbl)) s-=3; push(n,s);
+    }
+    const reBare = /(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})/g;
+    while ((m = reBare.exec(text)) !== null) {
+        const n = parseFloat(m[1].replace(/[, ]/g,'.')); push(n,0);
+    }
+    if (cands.length === 0) return NaN;
+    cands.sort((a,b)=> (b.s-a.s) || (b.n-a.n));
+    return cands[0].n;
+}
+
+function clientMerchantFromText(text) {
+    const lines = text.split(/\\r?\\n/).map(l=>l.trim()).filter(Boolean).slice(0,8);
+    const cands = lines.filter(l=>/[A-Za-z]/.test(l) && l.length>=3);
+    const prefer = cands.find(l=>/(foods?|market|store|restaurant|fast|chips|fish)/i.test(l));
+    return (prefer || cands[0] || '').replace(/["']/g,'').trim();
+}
+
+async function addScannedTransaction() {
+    const amount = parseFloat(document.getElementById('scanAmount').value);
+    const description = document.getElementById('scanMerchant').value;
+    const category = document.getElementById('scanCategory').value;
+    const date = document.getElementById('scanDate').value;
+    if (!amount || !description || !date) { alert('Missing scanned fields'); return; }
+    try {
+        const response = await fetch('/api/add-transaction', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ amount, description, category, type: 'expense', date })
+        });
+        const res = await response.json();
+        if (!response.ok) throw new Error(res?.error || 'Failed');
+        await updateDashboardData();
+        await loadBudgetData();
+        showNotification('✅ Scanned expense added', 'success');
+    } catch (e) { showNotification('Failed to add scanned expense', 'error'); }
+}
+
+function switchInputSection(which) {
+    const manual = document.getElementById('manualSection');
+    const scan = document.getElementById('scanSection');
+    const tabManual = document.getElementById('tabManual');
+    const tabScan = document.getElementById('tabScan');
+    if (!manual || !scan || !tabManual || !tabScan) return;
+    if (which === 'manual') {
+        manual.style.display = 'block';
+        scan.style.display = 'none';
+        tabManual.style.background = '#667eea';
+        tabManual.style.color = '#fff';
+        tabManual.style.borderColor = '#667eea';
+        tabScan.style.background = 'rgba(0,0,0,0.05)';
+        tabScan.style.color = '#2d3748';
+        tabScan.style.borderColor = 'rgba(0,0,0,0.1)';
+    } else {
+        manual.style.display = 'none';
+        scan.style.display = 'block';
+        tabScan.style.background = '#667eea';
+        tabScan.style.color = '#fff';
+        tabScan.style.borderColor = '#667eea';
+        tabManual.style.background = 'rgba(0,0,0,0.05)';
+        tabManual.style.color = '#2d3748';
+        tabManual.style.borderColor = 'rgba(0,0,0,0.1)';
+    }
+}
+
+// ===== Scan Receipt (LLM) helpers =====
+`;
 
     return new Response(js, {
       headers: { 'Content-Type': 'application/javascript' }
@@ -2000,7 +2443,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 Answer their specific question using this data. Keep responses under 150 words and be specific.`;
 
-        const response = await this.env.AI.run('@cf/meta/llama-3.3-70b-instruct', {
+        const response = await this.env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
           messages: [
             {
               role: 'system',
@@ -2313,5 +2756,391 @@ Answer their specific question using this data. Keep responses under 150 words a
         headers: { 'Content-Type': 'application/json' }
       });
     }
+  }
+
+  // ===== LLM Receipt Scanner =====
+  private async scanReceiptLLM(request: Request): Promise<Response> {
+    try {
+      const body = await request.json() as { image: string; filename?: string };
+      if (!body?.image) {
+        return new Response(JSON.stringify({ success: false, error: 'Missing image' }), { status: 400 });
+      }
+
+      // Convert data URL/base64 -> byte array for CF AI
+      const base64 = (body.image.includes(',') ? body.image.split(',')[1] : body.image).trim();
+      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+
+      // Improved prompt for better JSON extraction
+      let rawText = '';
+      let json = null;
+      
+      try {
+        // Use Llama 4 Scout with improved multimodal prompt
+        const res1 = await this.env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
+        messages: [
+            { 
+              role: 'user', 
+              content: [
+                { 
+                  type: 'text', 
+                  text: `Extract information from this receipt image and return ONLY a JSON object with this exact format:
+{
+  "amount": 0.00,
+  "currency": "USD",
+  "merchant": "Store Name",
+  "date": "2025-01-01",
+  "category": "food",
+  "confidence": 0.95
+}
+
+Instructions:
+- amount: Extract the TOTAL or GRAND TOTAL (including tax). Use decimal format (e.g., 45.67).
+- currency: Detect from $ symbol (USD), € (EUR), £ (GBP), or text.
+- merchant: Store/business name from the top of the receipt.
+- date: Convert to YYYY-MM-DD format (e.g., 12/25/2024 becomes 2025-12-25).
+- category: Choose ONE from: food, transportation, housing, entertainment, shopping, healthcare, other
+- confidence: Your confidence level from 0 to 1.
+
+Return ONLY the JSON object. No explanations, no markdown, no code blocks.`
+                },
+                { type: 'image_url', image_url: { url: body.image } }
+              ]
+            }
+          ]
+        });
+        
+        // Handle response - it might be an object already or a string
+        const response = res1?.response;
+        if (typeof response === 'object') {
+          console.log('Vision model returned object:', JSON.stringify(response));
+          json = response;
+        } else {
+          rawText = (response || '').toString();
+          console.log('Vision model raw text response:', rawText);
+          json = this.safeExtractJson(rawText);
+        }
+        
+        // If first attempt failed, try with even simpler prompt
+      if (!json) {
+          console.log('First parse failed, retrying with simpler prompt...');
+          const res2 = await this.env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
+          messages: [
+              { 
+                role: 'user', 
+                content: [
+                  { 
+                    type: 'text', 
+                    text: 'Look at this receipt. Extract: total amount, store name, date, and what category (food/shopping/etc). Return as JSON: {"amount": 0, "merchant": "", "date": "YYYY-MM-DD", "category": "food", "currency": "USD", "confidence": 1}. JSON only, no other text.'
+                  },
+                  { type: 'image_url', image_url: { url: body.image } }
+                ]
+              }
+            ]
+          });
+          
+          const response2 = res2?.response;
+          if (typeof response2 === 'object') {
+            console.log('Vision model retry returned object:', JSON.stringify(response2));
+            json = response2;
+          } else {
+            rawText = (response2 || '').toString();
+            console.log('Vision model retry text response:', rawText);
+        json = this.safeExtractJson(rawText);
+          }
+        }
+      } catch (visionError: any) {
+        console.error('Vision model error:', visionError);
+        // Return error with details for debugging
+        return new Response(JSON.stringify({ 
+          success: false,
+          error: 'Vision model error: ' + (visionError?.message || 'Unknown error'),
+          amount: 0,
+          merchant: '',
+          category: 'other',
+          date: new Date().toISOString().split('T')[0],
+          note: 'Please enter receipt details manually'
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      if (!json) {
+        // Last resort: try to parse natural language response
+        console.log('JSON parse failed, attempting natural language extraction from:', rawText);
+        json = this.extractFromNaturalLanguage(rawText);
+        
+        if (!json) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            error: 'Could not parse receipt. Raw response: ' + rawText.substring(0, 200),
+            amount: 0,
+            merchant: '',
+            category: 'other',
+            date: new Date().toISOString().split('T')[0],
+            debug: rawText
+          }), { 
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+      }
+
+      // Normalize and return (no heuristic refinement)
+      const normalized = this.normalizeReceipt(json);
+      if (!normalized.amount || !normalized.merchant || !normalized.date) {
+        return new Response(JSON.stringify({ success: false, error: 'Incomplete data from Vision' }), { status: 422 });
+      }
+
+      return new Response(JSON.stringify({ success: true, ...normalized }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (err: any) {
+      return new Response(JSON.stringify({ success: false, error: err?.message || 'Unexpected error' }), { status: 500 });
+    }
+  }
+
+  private extractFromNaturalLanguage(text: string): any | null {
+    try {
+      // Try to extract key information from natural language response
+      const result: any = {};
+      
+      // Extract amount - look for dollar amounts
+      const amountMatch = text.match(/(?:total|amount|price)[:\s]*\$?(\d+\.?\d*)/i) || 
+                          text.match(/\$(\d+\.?\d*)/);
+      if (amountMatch) {
+        result.amount = parseFloat(amountMatch[1]);
+      }
+      
+      // Extract merchant/store name
+      const merchantMatch = text.match(/(?:merchant|store|business|from)[:\s]*([A-Za-z0-9\s&']+?)(?:\.|,|\n|$)/i);
+      if (merchantMatch) {
+        result.merchant = merchantMatch[1].trim();
+      }
+      
+      // Extract date
+      const dateMatch = text.match(/(?:date)[:\s]*(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+      if (dateMatch) {
+        result.date = dateMatch[1];
+      }
+      
+      // Extract category
+      const categoryMatch = text.match(/(?:category)[:\s]*(food|transportation|housing|entertainment|shopping|healthcare|other)/i);
+      if (categoryMatch) {
+        result.category = categoryMatch[1].toLowerCase();
+      }
+      
+      // Only return if we got at least amount and merchant
+      if (result.amount && result.merchant) {
+        result.currency = result.currency || 'USD';
+        result.confidence = 0.7;
+        result.date = result.date || new Date().toISOString().split('T')[0];
+        result.category = result.category || 'other';
+        return result;
+      }
+    } catch (e) {
+      console.log('Natural language extraction failed:', e);
+    }
+    return null;
+  }
+
+  private safeExtractJson(text: string): any | null {
+    try {
+      // Remove markdown code fences if present
+      let cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+      cleaned = cleaned.trim();
+      
+      // Try direct parse if it looks like JSON
+      if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
+        try {
+          return JSON.parse(cleaned);
+        } catch (e) {
+          console.log('Direct parse failed:', e);
+        }
+      }
+      
+      // Try to extract JSON object from surrounding text
+      const jsonMatch = cleaned.match(/\{[\s\S]*?\}/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          // Validate it has expected fields
+          if (parsed && typeof parsed === 'object') {
+            return parsed;
+          }
+        } catch (e) {
+          console.log('Extracted JSON parse failed:', e);
+        }
+      }
+      
+      // Try to find JSON between newlines
+      const lines = cleaned.split('\n');
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine.startsWith('{') && trimmedLine.endsWith('}')) {
+          try {
+            return JSON.parse(trimmedLine);
+          } catch (e) {
+            // Continue to next line
+          }
+        }
+      }
+      
+    } catch (e) {
+      console.log('safeExtractJson error:', e);
+    }
+    return null;
+  }
+
+  private normalizeReceipt(input: any): { amount: number; merchant: string; date: string; category: string } {
+    const amount = this.normalizeAmount(input?.amount, input?.currency);
+    const merchant = this.cleanMerchant(input?.merchant);
+    const date = this.normalizeDate(input?.date);
+    const category = this.mapCategory(input?.category, merchant);
+    return { amount, merchant, date, category } as any;
+  }
+
+  private normalizeAmount(amount: any, currency?: string): number {
+    if (typeof amount === 'number') return Number(amount.toFixed(2));
+    if (typeof amount === 'string') {
+      const cleaned = amount.replace(/[, ]/g, '.').replace(/[^0-9.]/g, '');
+      const num = parseFloat(cleaned);
+      if (!isNaN(num)) return Number(num.toFixed(2));
+    }
+    return NaN as any;
+  }
+
+  private normalizeDate(dateStr: any): string {
+    if (!dateStr) return '' as any;
+    const s = String(dateStr).trim();
+    // Try YYYY-MM-DD directly
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    // Try MM/DD/YYYY or DD/MM/YYYY using heuristic
+    const m1 = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
+    if (m1) {
+      let d = parseInt(m1[2], 10), m = parseInt(m1[1], 10), y = parseInt(m1[3], 10);
+      // If first token > 12, assume DD/MM/YYYY
+      if (parseInt(m1[1], 10) > 12) { d = parseInt(m1[1], 10); m = parseInt(m1[2], 10); }
+      if (y < 100) y += 2000;
+      const dt = new Date(Date.UTC(y, m - 1, d));
+      if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
+    }
+    // Try DD-MM-YYYY
+    const m2 = s.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})$/);
+    if (m2) {
+      let d = parseInt(m2[1], 10), m = parseInt(m2[2], 10), y = parseInt(m2[3], 10);
+      if (y < 100) y += 2000;
+      const dt = new Date(Date.UTC(y, m - 1, d));
+      if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
+    }
+    // Fallback: Date.parse
+    const dt = new Date(s);
+    if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
+    return '' as any;
+  }
+
+  private cleanMerchant(merchant: any): string {
+    if (!merchant) return '';
+    return String(merchant).replace(/["']/g, '').trim();
+  }
+
+  private mapCategory(category: any, merchant: string): string {
+    const c = String(category || '').toLowerCase();
+    const m = (merchant || '').toLowerCase();
+    const is = (k: string) => c.includes(k) || m.includes(k);
+    if (is('restaurant') || is('cafe') || is('food') || is('burger') || is('pizza') || is('chip') || is('grocery') || is('market')) return 'food';
+    if (is('shell') || is('gas') || is('fuel') || is('uber') || is('lyft') || is('transport') || is('taxi')) return 'transportation';
+    if (is('rent') || is('mortgage') || is('home depot') || is('ikea')) return 'housing';
+    if (is('cinema') || is('movie') || is('theater') || is('amc')) return 'entertainment';
+    if (is('pharmacy') || is('cvs') || is('walgreens') || is('clinic')) return 'healthcare';
+    if (is('shop') || is('store') || is('shopping') || is('target') || is('walmart') || is('amazon')) return 'shopping';
+    return 'other';
+  }
+
+  private refineWithRaw(current: { amount: number; merchant: string; date: string; category: string }, raw: string) {
+    if (!raw) return current;
+    // 1) Amount: prefer best-scored total from raw text
+    const bestAmt = this.extractBestTotalFromText(raw);
+    if (!isNaN(bestAmt) && (!current.amount || bestAmt > current.amount * 1.05)) {
+      current.amount = Number(bestAmt.toFixed(2));
+    }
+    // 2) Date: use labeled/first valid date
+    const rawDate = this.extractDateFromText(raw);
+    if (rawDate) current.date = rawDate;
+    // 3) Merchant: header lines
+    const rawMerchant = this.extractMerchantFromText(raw);
+    if (rawMerchant && rawMerchant.length >= (current.merchant || '').length) {
+      current.merchant = rawMerchant;
+      current.category = this.mapCategory(current.category, rawMerchant);
+    }
+    return current;
+  }
+
+  // Score amounts based on nearby labels; choose best-scored, tie → largest
+  private extractBestTotalFromText(text: string): number {
+    type Cand = { val: number; score: number };
+    const cands: Cand[] = [];
+    const scan = (regex: RegExp) => {
+      let m: RegExpExecArray | null;
+      while ((m = regex.exec(text)) !== null) {
+        const label = (m[1] || '').toLowerCase();
+        const amtStr = (m[2] || m[1] || m[0]).toString();
+        const cleaned = amtStr.replace(/[, ]/g, '.').replace(/[^0-9.]/g, '');
+        const n = parseFloat(cleaned);
+        if (isNaN(n)) continue;
+        let score = 0;
+        if (/total\b/.test(label)) score += 4;
+        if (/grand\s*total/.test(label)) score += 5;
+        if (/subtotal/.test(label)) score += 2;
+        if (/tax|vat|tip/.test(label)) score -= 3;
+        cands.push({ val: n, score });
+      }
+    };
+    // label before amount: "Total: € 41.29"
+    scan(/([A-Za-z ]{0,20})[: ]*([€$£]?\s*\d{1,3}(?:[.,]\d{3})*[.,]\d{2})/gi);
+    // amount before label: "41.29 Total"
+    scan(/([€$£]?\s*\d{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*([A-Za-z ]{0,20})/gi);
+    // bare amounts with no labels
+    let m: RegExpExecArray | null;
+    const bare = /(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})/g;
+    while ((m = bare.exec(text)) !== null) {
+      const n = parseFloat(m[1].replace(/[, ]/g, '.')); if (!isNaN(n)) cands.push({ val: n, score: 0 });
+    }
+    if (cands.length === 0) return NaN as any;
+    cands.sort((a,b) => (b.score - a.score) || (b.val - a.val));
+    return cands[0].val;
+  }
+
+  private extractDateFromText(text: string): string | '' {
+    // Prefer lines labeled with Date
+    const labeled = text.match(/date\s*[:\-]?\s*(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}-\d{2}-\d{2})/i);
+    if (labeled) {
+      const iso = this.normalizeDate(labeled[1]);
+      if (iso) return iso;
+    }
+    // DD-MM-YYYY or DD/MM/YYYY
+    const m1 = text.match(/\b(\d{2})[\/-](\d{2})[\/-](\d{4})\b/);
+    if (m1) {
+      const d = parseInt(m1[1],10), mo = parseInt(m1[2],10), y = parseInt(m1[3],10);
+      const dt = new Date(Date.UTC(y, mo-1, d));
+      if (!isNaN(dt.getTime())) return dt.toISOString().slice(0,10);
+    }
+    // YYYY-MM-DD
+    const m2 = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+    if (m2) {
+      const y = parseInt(m2[1],10), mo = parseInt(m2[2],10), d = parseInt(m2[3],10);
+      const dt = new Date(Date.UTC(y, mo-1, d));
+      if (!isNaN(dt.getTime())) return dt.toISOString().slice(0,10);
+    }
+    return '' as any;
+  }
+
+  private extractMerchantFromText(text: string): string {
+    // Take top header lines (first ~5 lines with letters & ampersands)
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(0, 8);
+    const candidates = lines.filter(l => /[A-Za-z]/.test(l) && l.length >= 3);
+    // Prefer lines containing common store words
+    const prefer = candidates.find(l => /(foods?|market|store|restaurant|fast|chips|fish)/i.test(l));
+    return this.cleanMerchant(prefer || candidates[0] || '');
   }
 }

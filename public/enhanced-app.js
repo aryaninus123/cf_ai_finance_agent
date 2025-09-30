@@ -30,19 +30,23 @@ class EnhancedFinanceAssistant {
       });
     });
 
-    // Chat input
-    const messageInput = document.getElementById('messageInput');
+    // Chat input (support both messageInput and chatInput ids)
+    const messageInput = document.getElementById('messageInput') || document.getElementById('chatInput');
     const sendButton = document.getElementById('sendButton');
     
-    messageInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        this.sendMessage();
-      }
-    });
+    if (messageInput) {
+      messageInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          this.sendMessage();
+        }
+      });
+    }
     
-    sendButton.addEventListener('click', () => {
-      this.sendMessage();
-    });
+    if (sendButton) {
+      sendButton.addEventListener('click', () => {
+        this.sendMessage();
+      });
+    }
 
     // Enhanced input features
     const voiceButton = document.getElementById('voiceButton');
