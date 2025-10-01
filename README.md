@@ -114,7 +114,6 @@ npx wrangler dev --remote
 npm run build
 ```
 
-**Note**: Vision scanner requires deployed or remote mode - local `--local` mode doesn't support vision models.
 
 ---
 
@@ -153,39 +152,6 @@ AI: In September, you spent $1,847.23 across 45 transactions.
 
 ---
 
-## 🎯 Technical Highlights
-
-### **Intelligent Monthly Filtering**
-```typescript
-// Frontend calculates per-month breakdown
-function calculateMonthlyBreakdown(month, year) {
-  const breakdown = {};
-  allTransactions.forEach(transaction => {
-    if (transaction.type === 'expense') {
-      const txDate = new Date(transaction.date);
-      if (txDate.getMonth() === month && txDate.getFullYear() === year) {
-        breakdown[transaction.category] = 
-          (breakdown[transaction.category] || 0) + transaction.amount;
-      }
-    }
-  });
-  return breakdown;
-}
-```
-
-### **AI Vision Receipt Processing**
-```typescript
-// Multimodal AI call with image + text
-const response = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
-  messages: [{
-    role: 'user',
-    content: [
-      { type: 'text', text: 'Extract receipt data as JSON...' },
-      { type: 'image_url', image_url: { url: imageDataURL } }
-    ]
-  }]
-});
-```
 
 ### **Smart JSON Extraction**
 - Handles object responses directly
@@ -199,21 +165,6 @@ const response = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
 - Varied transaction amounts by category
 - Monthly income of $3000-3500
 - Balanced to show ~$3000-5000 total balance
-
----
-
-## 📊 API Endpoints
-
-| Endpoint | Method | Description |
-|----------|---------|-------------|
-| `/` | GET | Main application interface |
-| `/api/advice` | POST | AI chat, expense commands, monthly queries |
-| `/api/add-transaction` | POST | Manually add transaction |
-| `/api/get-summary` | GET | All transactions + category breakdown |
-| `/api/set-budget` | POST | Update category budget amount |
-| `/api/get-budgets` | GET | Retrieve all budget settings |
-| `/api/scan-receipt` | POST | AI vision OCR for receipt images |
-| `/api/reset-data` | POST | Clear and regenerate sample data |
 
 ---
 
@@ -342,24 +293,11 @@ ENVIRONMENT = "development"
 
 ---
 
-## 📝 Future Enhancements
-
-- [ ] Export to CSV/PDF
-- [ ] Recurring transaction templates
-- [ ] Bill payment reminders
-- [ ] Multi-currency support
-- [ ] Bank account integration
-- [ ] Shared budgets (multi-user)
-- [ ] Mobile app (React Native)
-
 ---
 
 ## 🔗 Links
 
 - **Live Demo**: [https://finance-agent.aryaninus.workers.dev](https://finance-agent.aryaninus.workers.dev)
-- **Cloudflare Workers**: [https://workers.cloudflare.com](https://workers.cloudflare.com)
-- **Cloudflare Workers AI**: [https://developers.cloudflare.com/workers-ai](https://developers.cloudflare.com/workers-ai)
-- **Llama 4 Scout Docs**: [https://developers.cloudflare.com/workers-ai/models/llama-4-scout-17b-16e-instruct](https://developers.cloudflare.com/workers-ai/models/llama-4-scout-17b-16e-instruct/)
 
 ---
 
@@ -369,14 +307,7 @@ MIT License - feel free to use this project for learning or building your own ap
 
 ---
 
-## 👤 Author
-
-**Aryan Gupta**
-- Applying for Cloudflare Internship 2025
-- Showcasing: Edge computing, AI integration, full-stack development
 
 ---
 
-**Built with ❤️ using Cloudflare Workers, Durable Objects, and Workers AI**
 
-*This project demonstrates the power of Cloudflare's edge platform for building intelligent, globally-distributed applications with zero cold starts and infinite scalability.*
