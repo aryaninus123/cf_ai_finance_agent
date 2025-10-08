@@ -580,7 +580,7 @@ class FinanceAssistant {
                             <span class="transaction-amount ${transaction.type}">
                                 ${transaction.type === 'income' ? '+' : '-'}$${transaction.amount.toFixed(2)}
                             </span>
-                            <span class="transaction-date">${new Date(transaction.date).toLocaleDateString()}</span>
+                            <span class="transaction-date">${new Date(transaction.date + 'T00:00:00').toLocaleDateString()}</span>
                         </div>
                     </div>
                 `).join('');

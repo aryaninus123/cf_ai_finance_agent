@@ -1,3 +1,6 @@
+import { generateSampleTransactions } from './sample-data';
+import { APIHandlers } from './api-handlers';
+
 interface Env {
   AI: any;
   FinanceAgent: DurableObjectNamespace;
@@ -6,10 +9,12 @@ interface Env {
 export class FinanceAgent {
   state: DurableObjectState;
   env: Env;
+  apiHandlers: APIHandlers;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
+    this.apiHandlers = new APIHandlers(state, env);
   }
 
   private async ensureInitialized() {
@@ -17,149 +22,10 @@ export class FinanceAgent {
     const transactions = await this.state.storage.get('transactions') as any[];
     if (!transactions || transactions.length === 0) {
       // Add sample transactions for the last 6 months
-      const sampleTransactions = this.generateSampleTransactions();
+      const sampleTransactions = generateSampleTransactions();
       await this.state.storage.put('transactions', sampleTransactions);
     }
   }
-
-  private generateSampleTransactions() {
-    const transactions = [];
-    const categories = ['food', 'transportation', 'housing', 'entertainment', 'shopping', 'healthcare'];
-    const descriptions: { [key: string]: string[] } = {
-      food: ['Grocery shopping', 'Restaurant dinner', 'Coffee shop', 'Fast food', 'Lunch'],
-      transportation: ['Gas station', 'Uber ride', 'Public transit', 'Car maintenance', 'Parking'],
-      housing: ['Rent', 'Utilities', 'Internet bill', 'Home supplies', 'Furniture'],
-      entertainment: ['Movie tickets', 'Concert', 'Streaming service', 'Gaming', 'Books'],
-      shopping: ['Clothing', 'Electronics', 'Home decor', 'Gifts', 'Online shopping'],
-      healthcare: ['Pharmacy', 'Doctor visit', 'Gym membership', 'Health insurance', 'Vitamins']
-    };
-    
-    // Budget targets per category (matching the default budgets)
-    const budgetTargets = {
-      food: 500,
-      transportation: 300,
-      housing: 1000,
-      entertainment: 200,
-      shopping: 300,
-      healthcare: 400
-    };
-    
-    // Generate transactions for last 3 months (more realistic starting balance)
-    const now = new Date();
-    for (let monthOffset = 2; monthOffset >= 0; monthOffset--) {
-      const month = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1);
-      const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
-      
-      // Track spending per category this month to stay within budget
-      const monthlySpending: { [key: string]: number } = {
-        food: 0,
-        transportation: 0,
-        housing: 0,
-        entertainment: 0,
-        shopping: 0,
-        healthcare: 0
-      };
-      
-      // Add 12-18 transactions per month (more realistic)
-      const transactionCount = Math.floor(Math.random() * 7) + 12;
-      for (let i = 0; i < transactionCount; i++) {
-        const category = categories[Math.floor(Math.random() * categories.length)];
-        const day = Math.floor(Math.random() * daysInMonth) + 1;
-        const date = new Date(month.getFullYear(), month.getMonth(), day);
-        const dateStr = date.toISOString().split('T')[0];
-        
-        const descList = descriptions[category];
-        const description = descList[Math.floor(Math.random() * descList.length)];
-        
-        // Calculate amount - mix of on-track, near-limit, and over-budget scenarios
-        const budget = budgetTargets[category as keyof typeof budgetTargets] || 300;
-        const currentSpending = monthlySpending[category] || 0;
-        
-        // Create realistic scenarios:
-        // 50% chance: stay well under budget (60-85%)
-        // 30% chance: get close to budget (85-100%)
-        // 20% chance: go over budget (100-120%)
-        const rand = Math.random();
-        let targetSpending;
-        if (rand < 0.5) {
-          targetSpending = budget * (0.6 + Math.random() * 0.25); // 60-85%
-        } else if (rand < 0.8) {
-          targetSpending = budget * (0.85 + Math.random() * 0.15); // 85-100%
-        } else {
-          targetSpending = budget * (1.0 + Math.random() * 0.2); // 100-120% (over budget!)
-        }
-        
-        const remainingBudget = targetSpending - currentSpending;
-        
-        let amount;
-        if (remainingBudget <= 0) continue; // Skip if target reached
-        
-        // Generate realistic transaction amounts
-        if (category === 'housing') {
-          amount = Math.min(Math.floor(Math.random() * 300) + 100, remainingBudget);
-        } else if (category === 'food') {
-          amount = Math.min(Math.floor(Math.random() * 40) + 10, remainingBudget);
-        } else if (category === 'transportation') {
-          amount = Math.min(Math.floor(Math.random() * 50) + 10, remainingBudget);
-        } else if (category === 'entertainment') {
-          amount = Math.min(Math.floor(Math.random() * 40) + 10, remainingBudget);
-        } else if (category === 'shopping') {
-          amount = Math.min(Math.floor(Math.random() * 60) + 15, remainingBudget);
-        } else { // healthcare
-          amount = Math.min(Math.floor(Math.random() * 80) + 20, remainingBudget);
-        }
-        
-        monthlySpending[category] += amount;
-        
-        transactions.push({
-          id: crypto.randomUUID(),
-          amount: Math.round(amount * 100) / 100, // Round to 2 decimals
-          description,
-          category,
-          type: 'expense',
-          date: dateStr,
-          timestamp: date.getTime()
-        });
-      }
-      
-      // Add realistic monthly income - slightly more than total budget
-      // Total budget is ~$2700/month, so income should be ~$3000-3500
-      const day = 1; // Salary typically comes at start of month
-      const date = new Date(month.getFullYear(), month.getMonth(), day);
-      const dateStr = date.toISOString().split('T')[0];
-      
-      transactions.push({
-        id: crypto.randomUUID(),
-        amount: Math.floor(Math.random() * 500) + 3000, // $3000-$3500
-        description: 'Monthly Salary',
-        category: 'income',
-        type: 'income',
-        date: dateStr,
-        timestamp: date.getTime()
-      });
-      
-      // Occasionally add side income (30% chance)
-      if (Math.random() < 0.3) {
-        const sideDay = Math.floor(Math.random() * daysInMonth) + 1;
-        const sideDate = new Date(month.getFullYear(), month.getMonth(), sideDay);
-        const sideDateStr = sideDate.toISOString().split('T')[0];
-        
-        transactions.push({
-          id: crypto.randomUUID(),
-          amount: Math.floor(Math.random() * 300) + 100, // $100-$400
-          description: 'Freelance work',
-          category: 'income',
-          type: 'income',
-          date: sideDateStr,
-          timestamp: sideDate.getTime()
-        });
-      }
-    }
-    
-    // Sort by date
-    return transactions.sort((a, b) => a.timestamp - b.timestamp);
-  }
-
 
   async fetch(request: Request): Promise<Response> {
     // Ensure we have sample data on first request
@@ -182,39 +48,37 @@ export class FinanceAgent {
       return this.serveJS();
     }
     
-    // API endpoints
+    // API endpoints - delegate to API handlers
     if (url.pathname === '/api/advice') {
-      return this.getAIAdvice(request);
+      return this.apiHandlers.getAIAdvice(request);
     }
     
     if (url.pathname === '/api/add-transaction') {
-      return this.addTransaction(request);
+      return this.apiHandlers.addTransaction(request);
     }
     
     if (url.pathname === '/api/get-summary') {
-      return this.getSummary(request);
+      return this.apiHandlers.getSummary(request);
     }
     
     // Reset data endpoint (for clearing old sample data)
     if (url.pathname === '/api/reset-data' && request.method === 'POST') {
-      await this.state.storage.deleteAll();
+      const response = await this.apiHandlers.handleResetData();
       await this.ensureInitialized();
-      return new Response(JSON.stringify({ success: true, message: 'Data reset with new sample transactions' }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return response;
     }
     
     if (url.pathname === '/api/set-budget' && request.method === 'POST') {
-      return this.setBudget(request);
+      return this.apiHandlers.setBudget(request);
     }
     
     if (url.pathname === '/api/get-budgets') {
-      return this.getBudgets(request);
+      return this.apiHandlers.getBudgets(request);
     }
 
     // LLM-powered receipt scanning endpoint
     if (url.pathname === '/api/scan-receipt' && request.method === 'POST') {
-      return this.scanReceiptLLM(request);
+      return this.apiHandlers.scanReceiptLLM(request);
     }
 
     return new Response('Not Found', { status: 404 });
@@ -249,15 +113,19 @@ export class FinanceAgent {
                 <h3>Dashboard</h3>
                 <div class="stat-card">
                     <div class="stat-value" id="balance">$0</div>
-                    <div class="stat-label">Balance</div>
+                    <div class="stat-label">Total Balance</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="income">$0</div>
+                    <div class="stat-label">Income This Month</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value" id="expenses">$0</div>
-                    <div class="stat-label">This Month</div>
+                    <div class="stat-label">Expenses This Month</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value" id="savings">$0</div>
-                    <div class="stat-label">Savings</div>
+                    <div class="stat-label">Saved This Month</div>
                 </div>
             </div>
         </div>
@@ -355,30 +223,44 @@ export class FinanceAgent {
                             <!-- Scan Receipt -->
                             <div class="scan-receipt-form">
                                 <h3>Scan Receipt (LLM)</h3>
-                                <div class="form-row" style="gap: 1rem; align-items: center;">
-                                    <label for="scanFile" class="file-upload-label">
+                                <p style="color: #718096; font-size: 0.9rem; margin-bottom: 1rem;">Upload a receipt image and AI will extract the transaction details</p>
+                                
+                                <!-- File Upload Section -->
+                                <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; padding: 1rem; background: rgba(102, 126, 234, 0.05); border-radius: 10px;">
+                                    <label for="scanFile" class="file-upload-label" style="flex: 1;">
                                         <span class="file-upload-text">Choose File</span>
                                         <span id="fileName" class="file-name"></span>
                                     </label>
                                     <input type="file" id="scanFile" accept="image/*" style="display: none;">
-                                    <button id="scanBtn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">Scan</button>
-                                    <span id="scanStatus" class="scan-status"></span>
+                                    <button id="scanBtn" style="padding: 0.75rem 1.5rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">Scan</button>
                                 </div>
-                                <div class="form-row">
-                                    <input type="number" id="scanAmount" placeholder="Amount" step="0.01">
-                                    <input type="text" id="scanMerchant" placeholder="Merchant">
-                                    <select id="scanCategory">
-                                        <option value="food">Food</option>
-                                        <option value="transportation">Transportation</option>
-                                        <option value="housing">Housing</option>
-                                        <option value="entertainment">Entertainment</option>
-                                        <option value="shopping">Shopping</option>
-                                        <option value="healthcare">Healthcare</option>
-                                        <option value="other">Other</option>
+                                
+                                <!-- Status Message -->
+                                <div style="margin-bottom: 1.5rem; min-height: 24px;">
+                                    <span id="scanStatus" class="scan-status" style="color: #667eea; font-weight: 500;"></span>
+                                </div>
+                                
+                                <!-- Transaction Details Form -->
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                                    <input type="number" id="scanAmount" placeholder="Amount ($)" step="0.01" style="padding: 0.75rem; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 1rem;">
+                                    <input type="text" id="scanMerchant" placeholder="Merchant/Description" style="padding: 0.75rem; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 1rem;">
+                                </div>
+                                
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+                                    <select id="scanCategory" style="padding: 0.75rem; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 1rem; background: white;">
+                                        <option value="food">🍕 Food</option>
+                                        <option value="transportation">🚗 Transportation</option>
+                                        <option value="housing">🏠 Housing</option>
+                                        <option value="entertainment">🎬 Entertainment</option>
+                                        <option value="shopping">🛍️ Shopping</option>
+                                        <option value="healthcare">🏥 Healthcare</option>
+                                        <option value="other">📦 Other</option>
                                     </select>
-                                    <input type="date" id="scanDate" value="">
-                                    <button id="addScannedBtn">Add</button>
+                                    <input type="date" id="scanDate" value="" style="padding: 0.75rem; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 1rem;">
                                 </div>
+                                
+                                <!-- Add Button -->
+                                <button id="addScannedBtn" style="width: 100%; padding: 0.875rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 10px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: transform 0.2s;">Add Transaction</button>
                             </div>
                         </div>
                     </div>
@@ -449,6 +331,7 @@ export class FinanceAgent {
                         <div class="analytics-row-2">
                             <div class="analytics-card-large">
                                 <h3>Budget Performance</h3>
+                                <p style="color: #718096; font-size: 0.9rem; margin-bottom: 1rem;">Current month's spending vs. budgets</p>
                                 <div id="budgetPerformance" class="budget-metrics-grid">
                                     <!-- Will show budget vs actual spending -->
                                 </div>
@@ -1706,14 +1589,29 @@ async function loadAnalyticsData() {
             return transactionDate.getMonth() !== currentMonth;
         });
         
-        // Load category breakdown
+        // Calculate CURRENT MONTH's category breakdown for budget performance
+        const now = new Date();
+        const currentMonth = now.getMonth();
+        const currentYear = now.getFullYear();
+        const currentMonthCategoryBreakdown = {};
+        
+        data.transactions.forEach(t => {
+            if (t.type === 'expense') {
+                const txDate = new Date(t.timestamp);
+                if (txDate.getMonth() === currentMonth && txDate.getFullYear() === currentYear) {
+                    currentMonthCategoryBreakdown[t.category] = (currentMonthCategoryBreakdown[t.category] || 0) + t.amount;
+                }
+            }
+        });
+        
+        // Load category breakdown (use all-time for overall spending distribution)
         loadCategoryAnalytics(data.categoryBreakdown);
         
         // Load monthly spending trend
         loadMonthlySpendingTrend(data.transactions, !hasHistoricalData);
         
-        // Load budget performance
-        loadBudgetPerformance(data.categoryBreakdown, budgetData.budgets);
+        // Load budget performance (use CURRENT MONTH only)
+        loadBudgetPerformance(currentMonthCategoryBreakdown, budgetData.budgets);
         
         // Load AI insights
         loadAIInsights(data);
@@ -1856,27 +1754,77 @@ function loadBudgetPerformance(categoryBreakdown, budgets) {
 async function loadAIInsights(data) {
     const container = document.getElementById('aiInsights');
     
-    // Generate AI insights based on data
-    try {
-        const breakdownStr = JSON.stringify(data.categoryBreakdown);
-        const messageText = 'Analyze my financial data and provide 3 specific actionable recommendations. Balance: $' + data.balance.toFixed(2) + ', Total expenses: $' + data.totalExpenses.toFixed(2) + ', Total income: $' + data.totalIncome.toFixed(2) + ', Spending breakdown: ' + breakdownStr;
-        
-        const response = await fetch('/api/advice', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                message: messageText
-            })
-        });
-        
-        const result = await response.json();
-        container.innerHTML = '<p>' + (result.response || result.advice || 'No insights available') + '</p>';
-    } catch (error) {
-        console.error('AI Insights error:', error);
-        container.innerHTML = '<p>💡 Based on your spending patterns, consider setting monthly budgets for each category and tracking your progress regularly.</p>';
+    // Generate smart insights based on actual data
+    const insights = [];
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    
+    // Calculate current month's spending
+    let monthlyIncome = 0;
+    let monthlyExpenses = 0;
+    const monthlyCategories = {};
+    
+    data.transactions.forEach(t => {
+        const txDate = new Date(t.timestamp);
+        if (txDate.getMonth() === currentMonth && txDate.getFullYear() === currentYear) {
+            if (t.type === 'income') {
+                monthlyIncome += t.amount;
+            } else if (t.type === 'expense') {
+                monthlyExpenses += t.amount;
+                monthlyCategories[t.category] = (monthlyCategories[t.category] || 0) + t.amount;
+            }
+        }
+    });
+    
+    // Insight 1: Overall financial health
+    if (monthlyIncome > 0) {
+        const savingsRate = ((monthlyIncome - monthlyExpenses) / monthlyIncome * 100).toFixed(1);
+        if (monthlyIncome > monthlyExpenses) {
+            const savings = (monthlyIncome - monthlyExpenses).toFixed(2);
+            insights.push(\`💰 <strong>Great job!</strong> You're saving \${savingsRate}% of your income this month ($\${savings}). Keep it up!\`);
+        } else {
+            const deficit = (monthlyExpenses - monthlyIncome).toFixed(2);
+            insights.push(\`⚠️ <strong>Heads up:</strong> You're spending $\${deficit} more than your income this month. Consider reviewing your expenses.\`);
+        }
     }
+    
+    // Insight 2: Highest spending category
+    const sortedCategories = Object.entries(monthlyCategories).sort((a, b) => b[1] - a[1]);
+    if (sortedCategories.length > 0) {
+        const topCategory = sortedCategories[0];
+        const percentage = ((topCategory[1] / monthlyExpenses) * 100).toFixed(1);
+        const categoryName = topCategory[0].charAt(0).toUpperCase() + topCategory[0].slice(1);
+        const amount = topCategory[1].toFixed(2);
+        insights.push(\`📊 <strong>Top spending:</strong> \${categoryName} accounts for \${percentage}% of your expenses ($\${amount} this month).\`);
+    }
+    
+    // Insight 3: Budget performance tip
+    const budgetsResponse = await fetch('/api/get-budgets');
+    const budgetData = await budgetsResponse.json();
+    const budgets = budgetData.budgets || {};
+    
+    let overBudgetCount = 0;
+    let nearLimitCount = 0;
+    Object.entries(monthlyCategories).forEach(([cat, amount]) => {
+        const budget = budgets[cat] || 500;
+        const percentage = (amount / budget) * 100;
+        if (percentage > 100) overBudgetCount++;
+        else if (percentage > 85) nearLimitCount++;
+    });
+    
+    if (overBudgetCount > 0) {
+        const word = overBudgetCount > 1 ? 'ies' : 'y';
+        insights.push(\`🚨 <strong>Budget alert:</strong> You're over budget in \${overBudgetCount} categor\${word}. Review these expenses to get back on track.\`);
+    } else if (nearLimitCount > 0) {
+        const word = nearLimitCount > 1 ? 'ies' : 'y';
+        insights.push(\`⚠️ <strong>Watch out:</strong> You're approaching your budget limit in \${nearLimitCount} categor\${word}. Plan ahead for the rest of the month.\`);
+    } else {
+        insights.push(\`✅ <strong>Well done!</strong> You're staying within your budgets across all categories. Keep up the good financial habits!\`);
+    }
+    
+    // Display insights
+    container.innerHTML = insights.map(insight => \`<p style="margin-bottom: 1rem; line-height: 1.6;">\${insight}</p>\`).join('');
 }
 
 function showNotification(message, type = 'info') {
@@ -1912,12 +1860,14 @@ function animateValue(element, start, end, duration) {
 
 function updateDashboard() {
     const balanceEl = document.getElementById('balance');
+    const incomeEl = document.getElementById('income');
     const expensesEl = document.getElementById('expenses');
     const savingsEl = document.getElementById('savings');
     
-    animateValue(balanceEl, 0, balance, 2000);
-    animateValue(expensesEl, 0, expenses, 2500);
-    animateValue(savingsEl, 0, savings, 3000);
+    if (balanceEl) animateValue(balanceEl, 0, balance, 2000);
+    if (incomeEl) animateValue(incomeEl, 0, 0, 2500); // Will be updated by updateDashboardData()
+    if (expensesEl) animateValue(expensesEl, 0, expenses, 2500);
+    if (savingsEl) animateValue(savingsEl, 0, savings, 3000);
 }
 
 function addMessage(content, isUser = false) {
@@ -1994,19 +1944,22 @@ async function updateDashboardData() {
     try {
         const response = await fetch('/api/get-summary');
         const data = await response.json();
-        
+
         // Update dashboard with real data
-        balance = data.balance;
-        expenses = data.totalExpenses;
-        savings = Math.max(0, data.balance * 0.2); // Assume 20% of balance is savings
-        
+        balance = data.balance; // Total balance (all-time income - all-time expenses)
+        const income = data.monthlyIncome; // Current month's income
+        expenses = data.monthlyExpenses; // Current month's expenses
+        savings = Math.max(0, data.monthlyIncome - data.monthlyExpenses); // This month's savings (income - expenses)
+
         // Animate to new values
         const balanceEl = document.getElementById('balance');
+        const incomeEl = document.getElementById('income');
         const expensesEl = document.getElementById('expenses');
         const savingsEl = document.getElementById('savings');
-        
-        if (balanceEl && expensesEl && savingsEl) {
+
+        if (balanceEl && incomeEl && expensesEl && savingsEl) {
             animateValue(balanceEl, parseFloat(balanceEl.textContent.replace('$', '')) || 0, balance, 1000);
+            animateValue(incomeEl, parseFloat(incomeEl.textContent.replace('$', '')) || 0, income, 1000);
             animateValue(expensesEl, parseFloat(expensesEl.textContent.replace('$', '')) || 0, expenses, 1000);
             animateValue(savingsEl, parseFloat(savingsEl.textContent.replace('$', '')) || 0, savings, 1000);
         }
@@ -2151,41 +2104,96 @@ async function scanReceiptFromFile() {
     const status = document.getElementById('scanStatus');
     const input = document.getElementById('scanFile');
     const file = input && input.files && input.files[0];
-    if (!file) { alert('Choose an image'); return; }
+    if (!file) { 
+        showNotification('Please choose an image file', 'error');
+        return; 
+    }
+    
     try {
-        if (status) status.textContent = 'Analyzing…';
+        if (status) status.textContent = 'Analyzing...';
+        showNotification('Scanning receipt... This may take a moment', 'info');
+        
         const dataURL = await fileToDataURL(file);
+        
+        // Add timeout to prevent hanging
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+        
         const response = await fetch('/api/scan-receipt', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: dataURL, filename: file.name })
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: dataURL, filename: file.name }),
+            signal: controller.signal
         });
+        
+        clearTimeout(timeoutId);
+        
         const res = await response.json();
-        if (!response.ok || !res.success) throw new Error(res?.error || 'Scan failed');
+        console.log('Scanner response:', res);
+        
+        if (!response.ok || !res.success) {
+            throw new Error(res?.error || 'Scan failed');
+        }
 
         // Client-side sanitation/fallbacks
         let outAmount = res.amount;
         let outMerchant = (typeof res.merchant === 'string') ? res.merchant : '';
         let outDate = res.date;
+        
+        console.log('Raw extraction:', { amount: outAmount, merchant: outMerchant, date: outDate });
+        
         if (!outMerchant || (outMerchant.trim().startsWith('{') && res.raw_text)) {
             outMerchant = clientMerchantFromText(res.raw_text || '');
+            console.log('Fallback merchant extraction:', outMerchant);
         }
         if ((!outAmount || outAmount < 5) && res.raw_text) {
             const cand = clientBestTotalFromText(res.raw_text);
-            if (!isNaN(cand)) outAmount = Number(cand.toFixed(2));
+            if (!isNaN(cand)) {
+                outAmount = Number(cand.toFixed(2));
+                console.log('Fallback amount extraction:', outAmount);
+            }
         }
 
         document.getElementById('scanAmount').value = outAmount ?? '';
         document.getElementById('scanMerchant').value = outMerchant ?? '';
         document.getElementById('scanCategory').value = res.category ?? 'other';
         document.getElementById('scanDate').value = outDate ?? new Date().toISOString().slice(0,10);
-        status.textContent = res.note || 'Parsed';
+        
+        if (status) status.textContent = res.note || 'Scanned!';
+        
+        // Check results and notify user
+        if (res.note && res.note.includes('dev mode')) {
+            showNotification('⚠️ Vision AI works best in production. Please enter details manually for now.', 'error');
+        } else if (!outAmount || outAmount === 0) {
+            showNotification('⚠️ Could not extract amount. Please enter manually.', 'error');
+        } else if (!outMerchant || outMerchant.length < 2) {
+            showNotification('⚠️ Could not extract merchant. Please review and edit.', 'error');
+        } else {
+            showNotification(\`✅ Scanned! Found $\${outAmount} from "\${outMerchant}". Please review before adding.\`, 'success');
+        }
     } catch (e) {
-        if (status) status.textContent = 'Error';
-        alert('Scan failed: ' + (e?.message || e));
+        console.error('Receipt scan error:', e);
+        if (status) status.textContent = 'Scan failed';
+        
+        // Check if it was a timeout
+        if (e.name === 'AbortError') {
+            showNotification('⏱️ Scan timed out. AI service may be slow. Please enter details manually.', 'error');
+        } else if (e.message.includes('fetch') || e.message.includes('network') || e.message.includes('Network')) {
+            showNotification('❌ Network error. AI service unavailable. Please enter details manually.', 'error');
+        } else {
+            showNotification('❌ Scan failed: ' + (e?.message || 'Unknown error') + '. Please enter details manually.', 'error');
+        }
+        
+        // Pre-fill with defaults so user can manually enter
+        const today = new Date().toISOString().slice(0,10);
+        if (!document.getElementById('scanDate').value) {
+            document.getElementById('scanDate').value = today;
+        }
     }
 }
 
 function clientBestTotalFromText(text) {
+    if (!text || typeof text !== 'string') return NaN;
     const cands = [];
     const push = (n, s) => { if (!isNaN(n)) cands.push({ n, s }); };
     let m;
@@ -2211,6 +2219,7 @@ function clientBestTotalFromText(text) {
 }
 
 function clientMerchantFromText(text) {
+    if (!text || typeof text !== 'string') return '';
     const lines = text.split(/\\r?\\n/).map(l=>l.trim()).filter(Boolean).slice(0,8);
     const cands = lines.filter(l=>/[A-Za-z]/.test(l) && l.length>=3);
     const prefer = cands.find(l=>/(foods?|market|store|restaurant|fast|chips|fish)/i.test(l));
@@ -2218,22 +2227,54 @@ function clientMerchantFromText(text) {
 }
 
 async function addScannedTransaction() {
-    const amount = parseFloat(document.getElementById('scanAmount').value);
-    const description = document.getElementById('scanMerchant').value;
-    const category = document.getElementById('scanCategory').value;
-    const date = document.getElementById('scanDate').value;
-    if (!amount || !description || !date) { alert('Missing scanned fields'); return; }
+    const amountInput = document.getElementById('scanAmount');
+    const descriptionInput = document.getElementById('scanMerchant');
+    const categoryInput = document.getElementById('scanCategory');
+    const dateInput = document.getElementById('scanDate');
+    
+    const amount = parseFloat(amountInput.value);
+    const description = descriptionInput.value.trim();
+    const category = categoryInput.value;
+    const date = dateInput.value;
+    
+    // Better validation
+    if (isNaN(amount) || amount <= 0) {
+        showNotification('❌ Please enter a valid amount greater than 0', 'error');
+        amountInput.focus();
+        return;
+    }
+    if (!description || description.length < 2) {
+        showNotification('❌ Please enter a description/merchant name', 'error');
+        descriptionInput.focus();
+        return;
+    }
+    if (!date) {
+        showNotification('❌ Please select a date', 'error');
+        dateInput.focus();
+        return;
+    }
+    
     try {
         const response = await fetch('/api/add-transaction', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ amount, description, category, type: 'expense', date })
         });
         const res = await response.json();
         if (!response.ok) throw new Error(res?.error || 'Failed');
+        
+        // Clear form
+        amountInput.value = '';
+        descriptionInput.value = '';
+        dateInput.value = '';
+        
         await updateDashboardData();
         await loadBudgetData();
-        showNotification('✅ Scanned expense added', 'success');
-    } catch (e) { showNotification('Failed to add scanned expense', 'error'); }
+        showNotification(\`✅ Added $\${amount.toFixed(2)} expense for "\${description}"\`, 'success');
+    } catch (e) { 
+        console.error('Add transaction error:', e);
+        showNotification('Failed to add scanned expense: ' + (e?.message || 'Unknown error'), 'error'); 
+    }
 }
 
 function switchInputSection(which) {
@@ -2271,876 +2312,5 @@ function switchInputSection(which) {
     });
   }
 
-  private async getAIAdvice(request: Request): Promise<Response> {
-    try {
-      const body = await request.json() as { message: string };
-      const { message } = body;
-      
-      // Get current financial data to provide context to AI (using same method as getSummary)
-      const transactions = await this.state.storage.get('transactions') as any[] || [];
-      
-      // Calculate totals
-      const totalIncome = transactions
-        .filter(t => t.type === 'income')
-        .reduce((sum, t) => sum + t.amount, 0);
-      
-      const totalExpenses = transactions
-        .filter(t => t.type === 'expense')
-        .reduce((sum, t) => sum + t.amount, 0);
-      
-      // Category breakdown
-      const categoryBreakdown: { [key: string]: number } = {};
-      transactions
-        .filter(t => t.type === 'expense')
-        .forEach(t => {
-          categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + t.amount;
-        });
-
-      const balance = totalIncome - totalExpenses;
-      const financialContext = {
-        balance,
-        totalIncome,
-        totalExpenses,
-        categoryBreakdown,
-        transactionCount: transactions.length,
-        recentTransactions: transactions.slice(-5) // Last 5 transactions
-      };
-      
-      // Check if this is an expense command - simpler pattern
-      const lowerMessage = message.toLowerCase();
-      if (lowerMessage.includes('add') && lowerMessage.includes('expense')) {
-        // Extract amount and description
-        const amountMatch = message.match(/\$?(\d+(?:\.\d{2})?)/);
-        if (amountMatch) {
-          const amount = parseFloat(amountMatch[1]);
-          // Extract description (everything between amount and 'expense')
-          let description = message.replace(/add/i, '').replace(/\$?\d+(?:\.\d{2})?/, '').replace(/expense/i, '').trim();
-          if (!description) description = 'expense';
-          const category = this.categorizeExpense(description);
-          
-          // Add the transaction directly
-          try {
-            // Use simple key-value storage directly
-            const transaction = {
-              id: crypto.randomUUID(),
-              amount,
-              description,
-              category,
-              type: 'expense' as 'expense',
-              date: new Date().toISOString().split('T')[0],
-              timestamp: Date.now()
-            };
-            
-            const existingTransactions = await this.state.storage.get('transactions') as any[] || [];
-            existingTransactions.push(transaction);
-            await this.state.storage.put('transactions', existingTransactions);
-            
-            return new Response(JSON.stringify({
-              response: `✅ Successfully added $${amount} ${category} expense for "${description}". Your expense has been tracked!`,
-              action: 'expense_added',
-              transaction
-            }), {
-              headers: { 'Content-Type': 'application/json' }
-            });
-          } catch (error) {
-            console.error('Error adding transaction via AI:', error);
-          }
-        }
-      }
-      
-      // Check if this is an income command
-      const incomeMatch = message.match(/add\s+\$?(\d+(?:\.\d{2})?)\s+(.+?)\s+income/i);
-      if (incomeMatch) {
-        const amount = parseFloat(incomeMatch[1]);
-        const description = incomeMatch[2].trim();
-        
-        const addResponse = await this.addTransaction(new Request('', {
-          method: 'POST',
-          body: JSON.stringify({
-            amount,
-            description,
-            category: 'income',
-            type: 'income'
-          })
-        }));
-        
-        const result = await addResponse.json() as any;
-        if (result.success) {
-          return new Response(JSON.stringify({
-            response: `✅ Successfully added $${amount} income for "${description}". Great job earning money!`,
-            action: 'income_added',
-            transaction: result.transaction
-          }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-      }
-      
-      // Check for specific financial questions first
-      const monthQuestion = message.match(/how much.*spend.*in\s+(\w+)/i);
-      const balanceQuestion = message.match(/what.*my.*balance|how much.*have|current.*balance/i);
-      const categoryQuestion = message.match(/how much.*spend.*on\s+(\w+)|(\w+)\s+spending/i);
-      
-      if (monthQuestion) {
-        const monthName = monthQuestion[1].toLowerCase();
-        const monthlySpending = this.calculateMonthlySpending(transactions, monthName);
-        
-        if (monthlySpending.found) {
-          return new Response(JSON.stringify({
-            response: `In ${monthlySpending.monthName}, you spent $${monthlySpending.amount.toFixed(2)} across ${monthlySpending.transactionCount} transactions. ${monthlySpending.topCategory ? `Your highest spending was in ${monthlySpending.topCategory.category} ($${monthlySpending.topCategory.amount.toFixed(2)}).` : ''}`
-          }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        } else {
-          return new Response(JSON.stringify({
-            response: `I don't have spending data for ${monthName}. Your available data shows spending in the current month ($${financialContext.totalExpenses.toFixed(2)}) and sample historical data. You can add historical transactions in the Budget Manager tab.`
-          }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-      }
-
-      if (balanceQuestion) {
-        return new Response(JSON.stringify({
-          response: `Your current balance is $${financialContext.balance.toFixed(2)}. You have $${financialContext.totalIncome.toFixed(2)} in total income and $${financialContext.totalExpenses.toFixed(2)} in expenses across ${financialContext.transactionCount} transactions.`
-        }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-
-      if (categoryQuestion) {
-        const category = (categoryQuestion[1] || categoryQuestion[2]).toLowerCase();
-        const categoryAmount = financialContext.categoryBreakdown[category] || 0;
-        
-        if (categoryAmount > 0) {
-          const percentage = ((categoryAmount / financialContext.totalExpenses) * 100).toFixed(1);
-          return new Response(JSON.stringify({
-            response: `You've spent $${categoryAmount.toFixed(2)} on ${category}, which is ${percentage}% of your total expenses ($${financialContext.totalExpenses.toFixed(2)}).`
-          }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        } else {
-          return new Response(JSON.stringify({
-            response: `You haven't recorded any spending in the ${category} category yet. Your current spending categories are: ${Object.keys(financialContext.categoryBreakdown).join(', ')}.`
-          }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-      }
-
-      // Try to use Cloudflare AI for other queries
-      try {
-        // Create a more concise system prompt
-        const systemPrompt = `You are a personal finance assistant. The user has:
-- Balance: $${financialContext.balance.toFixed(2)}
-- Income: $${financialContext.totalIncome.toFixed(2)}
-- Expenses: $${financialContext.totalExpenses.toFixed(2)}
-- Top spending: ${Object.entries(financialContext.categoryBreakdown)
-  .sort(([,a], [,b]) => b - a)
-  .slice(0, 3)
-  .map(([cat, amt]) => `${cat} $${amt.toFixed(2)}`)
-  .join(', ')}
-
-Answer their specific question using this data. Keep responses under 150 words and be specific.`;
-
-        const response = await this.env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
-          messages: [
-            {
-              role: 'system',
-              content: systemPrompt
-            },
-            {
-              role: 'user',
-              content: message
-            }
-          ]
-        });
-
-        // Better response handling
-        const aiResponse = response as any;
-        let responseText = '';
-        
-        if (aiResponse && aiResponse.response) {
-          responseText = aiResponse.response;
-        } else if (aiResponse && typeof aiResponse === 'string') {
-          responseText = aiResponse;
-        } else {
-          // Create a personalized fallback based on financial data
-          responseText = `Based on your current finances: You have a balance of $${financialContext.balance.toFixed(2)} with $${financialContext.totalExpenses.toFixed(2)} in expenses. Your top spending category is ${Object.entries(financialContext.categoryBreakdown).sort(([,a], [,b]) => b - a)[0]?.[0] || 'other'} at $${Object.entries(financialContext.categoryBreakdown).sort(([,a], [,b]) => b - a)[0]?.[1]?.toFixed(2) || '0'}. ${financialContext.balance > 0 ? 'You\'re doing well keeping a positive balance!' : 'Consider reducing expenses to improve your balance.'}`;
-        }
-
-        return new Response(JSON.stringify({
-          response: responseText
-        }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      } catch (aiError) {
-        console.error('AI Error:', aiError);
-        // Provide intelligent fallback with actual financial data
-        const intelligentFallback = `Based on your financial data: You currently have a balance of $${financialContext.balance.toFixed(2)}. You've spent $${financialContext.totalExpenses.toFixed(2)} across ${financialContext.transactionCount} transactions. Your highest spending category is ${Object.entries(financialContext.categoryBreakdown).sort(([,a], [,b]) => b - a)[0]?.[0] || 'other'} at $${Object.entries(financialContext.categoryBreakdown).sort(([,a], [,b]) => b - a)[0]?.[1]?.toFixed(2) || '0'}. ${financialContext.balance > financialContext.totalExpenses * 0.3 ? 'Your finances look healthy!' : 'Consider creating a budget to better manage expenses.'}`;
-        
-        return new Response(JSON.stringify({
-          response: intelligentFallback
-        }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    } catch (error) {
-      return new Response(JSON.stringify({
-        response: 'I can help you manage your finances! Try asking about budgeting, saving, or investment strategies.'
-      }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-  }
-
-  private calculateMonthlySpending(transactions: any[], monthName: string) {
-    const monthMap: { [key: string]: number } = {
-      'january': 0, 'jan': 0,
-      'february': 1, 'feb': 1,
-      'march': 2, 'mar': 2,
-      'april': 3, 'apr': 3,
-      'may': 4,
-      'june': 5, 'jun': 5,
-      'july': 6, 'jul': 6,
-      'august': 7, 'aug': 7,
-      'september': 8, 'sep': 8, 'sept': 8,
-      'october': 9, 'oct': 9,
-      'november': 10, 'nov': 10,
-      'december': 11, 'dec': 11
-    };
-
-    const targetMonth = monthMap[monthName];
-    if (targetMonth === undefined) {
-      return { found: false, monthName, amount: 0, transactionCount: 0 };
-    }
-
-    const monthTransactions = transactions.filter(t => {
-      if (t.type !== 'expense') return false;
-      const transactionDate = new Date(t.timestamp);
-      return transactionDate.getMonth() === targetMonth;
-    });
-
-    if (monthTransactions.length === 0) {
-      // Check if we have sample data for this month
-      const sampleAmounts: { [key: number]: number } = {
-        3: 180, // April
-        4: 220, // May  
-        5: 320, // June
-        6: 280, // July
-        7: 350  // August
-      };
-      
-      if (sampleAmounts[targetMonth]) {
-        const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
-                           'July', 'August', 'September', 'October', 'November', 'December'];
-        return { 
-          found: true, 
-          monthName: monthNames[targetMonth], 
-          amount: sampleAmounts[targetMonth], 
-          transactionCount: 5, // Estimated
-          isSample: true 
-        };
-      }
-      
-      return { found: false, monthName, amount: 0, transactionCount: 0 };
-    }
-
-    const totalAmount = monthTransactions.reduce((sum, t) => sum + t.amount, 0);
-    const categoryBreakdown: { [key: string]: number } = {};
-    
-    monthTransactions.forEach(t => {
-      categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + t.amount;
-    });
-
-    const topCategory = Object.entries(categoryBreakdown)
-      .sort(([,a], [,b]) => b - a)[0];
-
-    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
-                       'July', 'August', 'September', 'October', 'November', 'December'];
-
-    return {
-      found: true,
-      monthName: monthNames[targetMonth],
-      amount: totalAmount,
-      transactionCount: monthTransactions.length,
-      topCategory: topCategory ? { category: topCategory[0], amount: topCategory[1] } : null,
-      isSample: false
-    };
-  }
-
-  private categorizeExpense(description: string): string {
-    const desc = description.toLowerCase();
-    if (desc.includes('food') || desc.includes('grocery') || desc.includes('restaurant') || desc.includes('lunch') || desc.includes('dinner')) return 'food';
-    if (desc.includes('gas') || desc.includes('transport') || desc.includes('uber') || desc.includes('taxi') || desc.includes('bus')) return 'transportation';
-    if (desc.includes('rent') || desc.includes('mortgage') || desc.includes('utilities') || desc.includes('electric') || desc.includes('water')) return 'housing';
-    if (desc.includes('movie') || desc.includes('entertainment') || desc.includes('game') || desc.includes('concert')) return 'entertainment';
-    if (desc.includes('clothes') || desc.includes('clothing') || desc.includes('shopping')) return 'shopping';
-    if (desc.includes('health') || desc.includes('medical') || desc.includes('doctor') || desc.includes('pharmacy')) return 'healthcare';
-    return 'other';
-  }
-
-  private getDefaultResponse(message: string): string {
-    const msg = message.toLowerCase();
-    if (msg.includes('budget')) {
-      return 'I can help you with budgeting! Try the 50/30/20 rule: 50% for needs, 30% for wants, 20% for savings. What specific budgeting area would you like help with?';
-    }
-    if (msg.includes('save') || msg.includes('saving')) {
-      return 'Great question about saving! Start by tracking your expenses, then look for areas to cut back. Even saving $50/month adds up to $600/year!';
-    }
-    if (msg.includes('invest')) {
-      return 'For investing, consider starting with low-cost index funds, diversify your portfolio, and think long-term. What\'s your investment timeline?';
-    }
-    if (msg.includes('expense') || msg.includes('add')) {
-      return 'To add an expense, use this format: "Add $50 grocery expense" or "Add $25 gas expense". I\'ll track it for you!';
-    }
-    return 'I can help you manage your finances! Try asking about budgeting, saving, investment strategies, or add expenses like "Add $50 grocery expense".';
-  }
-
-  private async addTransaction(request: Request): Promise<Response> {
-    try {
-      const body = await request.json() as { amount: number; description: string; category: string; type: 'income' | 'expense'; date?: string };
-      
-      // Use provided date or default to today
-      const transactionDate = body.date ? new Date(body.date) : new Date();
-      
-      // Create new transaction
-      const transaction = {
-        id: crypto.randomUUID(),
-        amount: body.amount,
-        description: body.description,
-        category: body.category,
-        type: body.type,
-        date: transactionDate.toISOString().split('T')[0],
-        timestamp: transactionDate.getTime()
-      };
-      
-      // Use simple key-value storage for now (more reliable)
-      const existingTransactions = await this.state.storage.get('transactions') as any[] || [];
-      existingTransactions.push(transaction);
-      await this.state.storage.put('transactions', existingTransactions);
-      
-      return new Response(JSON.stringify({
-        success: true,
-        transaction,
-        message: `Successfully added ${body.type} of $${body.amount} for ${body.description}`
-      }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    } catch (error) {
-      console.error('Error adding transaction:', error);
-      return new Response(JSON.stringify({
-        success: false,
-        message: `Failed to add transaction: ${error}`
-      }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-  }
-
-  private async getSummary(request: Request): Promise<Response> {
-    try {
-      // Get all transactions from key-value storage
-      const transactions = await this.state.storage.get('transactions') as any[] || [];
-      
-      // Calculate totals
-      const totalIncome = transactions
-        .filter(t => t.type === 'income')
-        .reduce((sum, t) => sum + t.amount, 0);
-      
-      const totalExpenses = transactions
-        .filter(t => t.type === 'expense')
-        .reduce((sum, t) => sum + t.amount, 0);
-      
-      const balance = totalIncome - totalExpenses;
-      
-      // Category breakdown
-      const categoryBreakdown: Record<string, number> = {};
-      transactions
-        .filter(t => t.type === 'expense')
-        .forEach(t => {
-          categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + t.amount;
-        });
-      
-      // Sort transactions by timestamp (newest first)
-      const sortedTransactions = transactions
-        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
-        .slice(0, 10);
-      
-      return new Response(JSON.stringify({
-        balance: Number(balance.toFixed(2)),
-        totalIncome: Number(totalIncome.toFixed(2)),
-        totalExpenses: Number(totalExpenses.toFixed(2)),
-        categoryBreakdown,
-        transactions: sortedTransactions
-      }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    } catch (error) {
-      console.error('Error getting summary:', error);
-      return new Response(JSON.stringify({
-        balance: 0,
-        totalIncome: 0,
-        totalExpenses: 0,
-        categoryBreakdown: {},
-        transactions: []
-      }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-  }
-
-  private async setBudget(request: Request): Promise<Response> {
-    try {
-      const body = await request.json() as { category: string; amount: number };
-      
-      // Get existing budgets
-      const existingBudgets = await this.state.storage.get('budgets') as Record<string, number> || {};
-      
-      // Update the budget for the category
-      existingBudgets[body.category] = body.amount;
-      
-      // Save back to storage
-      await this.state.storage.put('budgets', existingBudgets);
-      
-      return new Response(JSON.stringify({
-        success: true,
-        message: `Budget for ${body.category} set to $${body.amount.toFixed(2)}`,
-        budgets: existingBudgets
-      }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    } catch (error) {
-      return new Response(JSON.stringify({
-        error: 'Failed to set budget',
-        details: error
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-  }
-
-  private async getBudgets(request: Request): Promise<Response> {
-    try {
-      // Get budgets from storage, with default values
-      const budgets = await this.state.storage.get('budgets') as Record<string, number> || {};
-      
-      // Set default budgets if none exist
-      const defaultBudgets = {
-        food: 500,
-        transportation: 300,
-        housing: 1000,
-        entertainment: 200,
-        shopping: 300,
-        healthcare: 400,
-        other: 200
-      };
-      
-      // Merge with defaults
-      const finalBudgets = { ...defaultBudgets, ...budgets };
-      
-      return new Response(JSON.stringify({
-        success: true,
-        budgets: finalBudgets
-      }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    } catch (error) {
-      return new Response(JSON.stringify({
-        error: 'Failed to get budgets',
-        details: error
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-  }
-
-  // ===== LLM Receipt Scanner =====
-  private async scanReceiptLLM(request: Request): Promise<Response> {
-    try {
-      const body = await request.json() as { image: string; filename?: string };
-      if (!body?.image) {
-        return new Response(JSON.stringify({ success: false, error: 'Missing image' }), { status: 400 });
-      }
-
-      // Convert data URL/base64 -> byte array for CF AI
-      const base64 = (body.image.includes(',') ? body.image.split(',')[1] : body.image).trim();
-      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-
-      // Improved prompt for better JSON extraction
-      let rawText = '';
-      let json = null;
-      
-      try {
-        // Use Llama 4 Scout with improved multimodal prompt
-        const res1 = await this.env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
-        messages: [
-            { 
-              role: 'user', 
-              content: [
-                { 
-                  type: 'text', 
-                  text: `Extract information from this receipt image and return ONLY a JSON object with this exact format:
-{
-  "amount": 0.00,
-  "currency": "USD",
-  "merchant": "Store Name",
-  "date": "2025-01-01",
-  "category": "food",
-  "confidence": 0.95
 }
 
-Instructions:
-- amount: Extract the TOTAL or GRAND TOTAL (including tax). Use decimal format (e.g., 45.67).
-- currency: Detect from $ symbol (USD), € (EUR), £ (GBP), or text.
-- merchant: Store/business name from the top of the receipt.
-- date: Convert to YYYY-MM-DD format (e.g., 12/25/2024 becomes 2025-12-25).
-- category: Choose ONE from: food, transportation, housing, entertainment, shopping, healthcare, other
-- confidence: Your confidence level from 0 to 1.
-
-Return ONLY the JSON object. No explanations, no markdown, no code blocks.`
-                },
-                { type: 'image_url', image_url: { url: body.image } }
-              ]
-            }
-          ]
-        });
-        
-        // Handle response - it might be an object already or a string
-        const response = res1?.response;
-        if (typeof response === 'object') {
-          console.log('Vision model returned object:', JSON.stringify(response));
-          json = response;
-        } else {
-          rawText = (response || '').toString();
-          console.log('Vision model raw text response:', rawText);
-          json = this.safeExtractJson(rawText);
-        }
-        
-        // If first attempt failed, try with even simpler prompt
-      if (!json) {
-          console.log('First parse failed, retrying with simpler prompt...');
-          const res2 = await this.env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
-          messages: [
-              { 
-                role: 'user', 
-                content: [
-                  { 
-                    type: 'text', 
-                    text: 'Look at this receipt. Extract: total amount, store name, date, and what category (food/shopping/etc). Return as JSON: {"amount": 0, "merchant": "", "date": "YYYY-MM-DD", "category": "food", "currency": "USD", "confidence": 1}. JSON only, no other text.'
-                  },
-                  { type: 'image_url', image_url: { url: body.image } }
-                ]
-              }
-            ]
-          });
-          
-          const response2 = res2?.response;
-          if (typeof response2 === 'object') {
-            console.log('Vision model retry returned object:', JSON.stringify(response2));
-            json = response2;
-          } else {
-            rawText = (response2 || '').toString();
-            console.log('Vision model retry text response:', rawText);
-        json = this.safeExtractJson(rawText);
-          }
-        }
-      } catch (visionError: any) {
-        console.error('Vision model error:', visionError);
-        // Return error with details for debugging
-        return new Response(JSON.stringify({ 
-          success: false,
-          error: 'Vision model error: ' + (visionError?.message || 'Unknown error'),
-          amount: 0,
-          merchant: '',
-          category: 'other',
-          date: new Date().toISOString().split('T')[0],
-          note: 'Please enter receipt details manually'
-        }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-
-      if (!json) {
-        // Last resort: try to parse natural language response
-        console.log('JSON parse failed, attempting natural language extraction from:', rawText);
-        json = this.extractFromNaturalLanguage(rawText);
-        
-        if (!json) {
-          return new Response(JSON.stringify({ 
-            success: false, 
-            error: 'Could not parse receipt. Raw response: ' + rawText.substring(0, 200),
-            amount: 0,
-            merchant: '',
-            category: 'other',
-            date: new Date().toISOString().split('T')[0],
-            debug: rawText
-          }), { 
-            status: 200,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-      }
-
-      // Normalize and return (no heuristic refinement)
-      const normalized = this.normalizeReceipt(json);
-      if (!normalized.amount || !normalized.merchant || !normalized.date) {
-        return new Response(JSON.stringify({ success: false, error: 'Incomplete data from Vision' }), { status: 422 });
-      }
-
-      return new Response(JSON.stringify({ success: true, ...normalized }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    } catch (err: any) {
-      return new Response(JSON.stringify({ success: false, error: err?.message || 'Unexpected error' }), { status: 500 });
-    }
-  }
-
-  private extractFromNaturalLanguage(text: string): any | null {
-    try {
-      // Try to extract key information from natural language response
-      const result: any = {};
-      
-      // Extract amount - look for dollar amounts
-      const amountMatch = text.match(/(?:total|amount|price)[:\s]*\$?(\d+\.?\d*)/i) || 
-                          text.match(/\$(\d+\.?\d*)/);
-      if (amountMatch) {
-        result.amount = parseFloat(amountMatch[1]);
-      }
-      
-      // Extract merchant/store name
-      const merchantMatch = text.match(/(?:merchant|store|business|from)[:\s]*([A-Za-z0-9\s&']+?)(?:\.|,|\n|$)/i);
-      if (merchantMatch) {
-        result.merchant = merchantMatch[1].trim();
-      }
-      
-      // Extract date
-      const dateMatch = text.match(/(?:date)[:\s]*(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})/i);
-      if (dateMatch) {
-        result.date = dateMatch[1];
-      }
-      
-      // Extract category
-      const categoryMatch = text.match(/(?:category)[:\s]*(food|transportation|housing|entertainment|shopping|healthcare|other)/i);
-      if (categoryMatch) {
-        result.category = categoryMatch[1].toLowerCase();
-      }
-      
-      // Only return if we got at least amount and merchant
-      if (result.amount && result.merchant) {
-        result.currency = result.currency || 'USD';
-        result.confidence = 0.7;
-        result.date = result.date || new Date().toISOString().split('T')[0];
-        result.category = result.category || 'other';
-        return result;
-      }
-    } catch (e) {
-      console.log('Natural language extraction failed:', e);
-    }
-    return null;
-  }
-
-  private safeExtractJson(text: string): any | null {
-    try {
-      // Remove markdown code fences if present
-      let cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
-      cleaned = cleaned.trim();
-      
-      // Try direct parse if it looks like JSON
-      if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
-        try {
-          return JSON.parse(cleaned);
-        } catch (e) {
-          console.log('Direct parse failed:', e);
-        }
-      }
-      
-      // Try to extract JSON object from surrounding text
-      const jsonMatch = cleaned.match(/\{[\s\S]*?\}/);
-      if (jsonMatch) {
-        try {
-          const parsed = JSON.parse(jsonMatch[0]);
-          // Validate it has expected fields
-          if (parsed && typeof parsed === 'object') {
-            return parsed;
-          }
-        } catch (e) {
-          console.log('Extracted JSON parse failed:', e);
-        }
-      }
-      
-      // Try to find JSON between newlines
-      const lines = cleaned.split('\n');
-      for (const line of lines) {
-        const trimmedLine = line.trim();
-        if (trimmedLine.startsWith('{') && trimmedLine.endsWith('}')) {
-          try {
-            return JSON.parse(trimmedLine);
-          } catch (e) {
-            // Continue to next line
-          }
-        }
-      }
-      
-    } catch (e) {
-      console.log('safeExtractJson error:', e);
-    }
-    return null;
-  }
-
-  private normalizeReceipt(input: any): { amount: number; merchant: string; date: string; category: string } {
-    const amount = this.normalizeAmount(input?.amount, input?.currency);
-    const merchant = this.cleanMerchant(input?.merchant);
-    const date = this.normalizeDate(input?.date);
-    const category = this.mapCategory(input?.category, merchant);
-    return { amount, merchant, date, category } as any;
-  }
-
-  private normalizeAmount(amount: any, currency?: string): number {
-    if (typeof amount === 'number') return Number(amount.toFixed(2));
-    if (typeof amount === 'string') {
-      const cleaned = amount.replace(/[, ]/g, '.').replace(/[^0-9.]/g, '');
-      const num = parseFloat(cleaned);
-      if (!isNaN(num)) return Number(num.toFixed(2));
-    }
-    return NaN as any;
-  }
-
-  private normalizeDate(dateStr: any): string {
-    if (!dateStr) return '' as any;
-    const s = String(dateStr).trim();
-    // Try YYYY-MM-DD directly
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    // Try MM/DD/YYYY or DD/MM/YYYY using heuristic
-    const m1 = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
-    if (m1) {
-      let d = parseInt(m1[2], 10), m = parseInt(m1[1], 10), y = parseInt(m1[3], 10);
-      // If first token > 12, assume DD/MM/YYYY
-      if (parseInt(m1[1], 10) > 12) { d = parseInt(m1[1], 10); m = parseInt(m1[2], 10); }
-      if (y < 100) y += 2000;
-      const dt = new Date(Date.UTC(y, m - 1, d));
-      if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
-    }
-    // Try DD-MM-YYYY
-    const m2 = s.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})$/);
-    if (m2) {
-      let d = parseInt(m2[1], 10), m = parseInt(m2[2], 10), y = parseInt(m2[3], 10);
-      if (y < 100) y += 2000;
-      const dt = new Date(Date.UTC(y, m - 1, d));
-      if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
-    }
-    // Fallback: Date.parse
-    const dt = new Date(s);
-    if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
-    return '' as any;
-  }
-
-  private cleanMerchant(merchant: any): string {
-    if (!merchant) return '';
-    return String(merchant).replace(/["']/g, '').trim();
-  }
-
-  private mapCategory(category: any, merchant: string): string {
-    const c = String(category || '').toLowerCase();
-    const m = (merchant || '').toLowerCase();
-    const is = (k: string) => c.includes(k) || m.includes(k);
-    if (is('restaurant') || is('cafe') || is('food') || is('burger') || is('pizza') || is('chip') || is('grocery') || is('market')) return 'food';
-    if (is('shell') || is('gas') || is('fuel') || is('uber') || is('lyft') || is('transport') || is('taxi')) return 'transportation';
-    if (is('rent') || is('mortgage') || is('home depot') || is('ikea')) return 'housing';
-    if (is('cinema') || is('movie') || is('theater') || is('amc')) return 'entertainment';
-    if (is('pharmacy') || is('cvs') || is('walgreens') || is('clinic')) return 'healthcare';
-    if (is('shop') || is('store') || is('shopping') || is('target') || is('walmart') || is('amazon')) return 'shopping';
-    return 'other';
-  }
-
-  private refineWithRaw(current: { amount: number; merchant: string; date: string; category: string }, raw: string) {
-    if (!raw) return current;
-    // 1) Amount: prefer best-scored total from raw text
-    const bestAmt = this.extractBestTotalFromText(raw);
-    if (!isNaN(bestAmt) && (!current.amount || bestAmt > current.amount * 1.05)) {
-      current.amount = Number(bestAmt.toFixed(2));
-    }
-    // 2) Date: use labeled/first valid date
-    const rawDate = this.extractDateFromText(raw);
-    if (rawDate) current.date = rawDate;
-    // 3) Merchant: header lines
-    const rawMerchant = this.extractMerchantFromText(raw);
-    if (rawMerchant && rawMerchant.length >= (current.merchant || '').length) {
-      current.merchant = rawMerchant;
-      current.category = this.mapCategory(current.category, rawMerchant);
-    }
-    return current;
-  }
-
-  // Score amounts based on nearby labels; choose best-scored, tie → largest
-  private extractBestTotalFromText(text: string): number {
-    type Cand = { val: number; score: number };
-    const cands: Cand[] = [];
-    const scan = (regex: RegExp) => {
-      let m: RegExpExecArray | null;
-      while ((m = regex.exec(text)) !== null) {
-        const label = (m[1] || '').toLowerCase();
-        const amtStr = (m[2] || m[1] || m[0]).toString();
-        const cleaned = amtStr.replace(/[, ]/g, '.').replace(/[^0-9.]/g, '');
-        const n = parseFloat(cleaned);
-        if (isNaN(n)) continue;
-        let score = 0;
-        if (/total\b/.test(label)) score += 4;
-        if (/grand\s*total/.test(label)) score += 5;
-        if (/subtotal/.test(label)) score += 2;
-        if (/tax|vat|tip/.test(label)) score -= 3;
-        cands.push({ val: n, score });
-      }
-    };
-    // label before amount: "Total: € 41.29"
-    scan(/([A-Za-z ]{0,20})[: ]*([€$£]?\s*\d{1,3}(?:[.,]\d{3})*[.,]\d{2})/gi);
-    // amount before label: "41.29 Total"
-    scan(/([€$£]?\s*\d{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*([A-Za-z ]{0,20})/gi);
-    // bare amounts with no labels
-    let m: RegExpExecArray | null;
-    const bare = /(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})/g;
-    while ((m = bare.exec(text)) !== null) {
-      const n = parseFloat(m[1].replace(/[, ]/g, '.')); if (!isNaN(n)) cands.push({ val: n, score: 0 });
-    }
-    if (cands.length === 0) return NaN as any;
-    cands.sort((a,b) => (b.score - a.score) || (b.val - a.val));
-    return cands[0].val;
-  }
-
-  private extractDateFromText(text: string): string | '' {
-    // Prefer lines labeled with Date
-    const labeled = text.match(/date\s*[:\-]?\s*(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}-\d{2}-\d{2})/i);
-    if (labeled) {
-      const iso = this.normalizeDate(labeled[1]);
-      if (iso) return iso;
-    }
-    // DD-MM-YYYY or DD/MM/YYYY
-    const m1 = text.match(/\b(\d{2})[\/-](\d{2})[\/-](\d{4})\b/);
-    if (m1) {
-      const d = parseInt(m1[1],10), mo = parseInt(m1[2],10), y = parseInt(m1[3],10);
-      const dt = new Date(Date.UTC(y, mo-1, d));
-      if (!isNaN(dt.getTime())) return dt.toISOString().slice(0,10);
-    }
-    // YYYY-MM-DD
-    const m2 = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-    if (m2) {
-      const y = parseInt(m2[1],10), mo = parseInt(m2[2],10), d = parseInt(m2[3],10);
-      const dt = new Date(Date.UTC(y, mo-1, d));
-      if (!isNaN(dt.getTime())) return dt.toISOString().slice(0,10);
-    }
-    return '' as any;
-  }
-
-  private extractMerchantFromText(text: string): string {
-    // Take top header lines (first ~5 lines with letters & ampersands)
-    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(0, 8);
-    const candidates = lines.filter(l => /[A-Za-z]/.test(l) && l.length >= 3);
-    // Prefer lines containing common store words
-    const prefer = candidates.find(l => /(foods?|market|store|restaurant|fast|chips|fish)/i.test(l));
-    return this.cleanMerchant(prefer || candidates[0] || '');
-  }
-}
