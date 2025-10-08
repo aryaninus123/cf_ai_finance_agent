@@ -32,7 +32,7 @@ Thumbs.db
 
 # Logs
 *.log
-
+*.md
 # Temporary files
 *.tmp
 *.temp

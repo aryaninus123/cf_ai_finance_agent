@@ -1,6 +1,8 @@
 // API handlers for the Finance AI application
 // This file contains all API endpoint logic extracted from simple-agent.ts
 
+import { ReceiptScanner } from './receipt-scanner';
+
 interface Env {
   AI: any;
   FinanceAgent: DurableObjectNamespace;
@@ -29,7 +31,7 @@ export class APIHandlers {
       const body = await request.json() as { message: string };
       const { message } = body;
       
-      // Get current financial data to provide context to AI (using same method as getSummary)
+      // Get current financial data to provide context to AI
       const transactions = await this.state.storage.get('transactions') as any[] || [];
       
       // Calculate totals
@@ -50,22 +52,27 @@ export class APIHandlers {
         });
 
       const balance = totalIncome - totalExpenses;
+
+      // ========== HYBRID APPROACH: Use deterministic code for precise calculations ==========
+      // For questions requiring exact calculations, use regex + direct computation
+      // For general advice, use LLM
+      
       const financialContext = {
         balance,
         totalIncome,
         totalExpenses,
         categoryBreakdown,
         transactionCount: transactions.length,
-        recentTransactions: transactions.slice(-5) // Last 5 transactions
+        recentTransactions: transactions.slice(-5)
       };
       
-      // Check for specific financial questions FIRST (before transaction parsing)
-      const monthQuestion = message.match(/how much.*(did|do).*spend.*in\s+(\w+)/i);
-      const balanceQuestion = message.match(/what.*my.*balance|how much.*have|current.*balance/i);
-      const categoryQuestion = message.match(/how much.*spend.*on\s+(\w+)|(\w+)\s+spending/i);
+      // Check for specific financial questions that need precise answers
       const dayQuestion = message.match(/which day.*spend.*(most|least|highest|lowest)|what day.*(most|least).*spending|(highest|lowest).*spending.*day/i);
+      const monthQuestion = message.match(/how much.*(did|do|have).*spend.*(in|during|for)\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)/i);
+      const balanceQuestion = message.match(/what.*my.*balance|how much.*have|current.*balance/i);
+      const categoryQuestion = message.match(/how much.*(did|do|have).*spend.*on\s+(\w+)/i);
       
-      // Handle "which day did I spend the most/least" questions
+      // Handle day-specific questions with DETERMINISTIC calculation
       if (dayQuestion) {
         const isLeast = /least|lowest/.test(message.toLowerCase());
         const monthMatch = message.match(/(?:in|of)\s+(january|february|march|april|may|june|july|august|september|october|november|december)/i);
@@ -89,8 +96,9 @@ export class APIHandlers {
         }
       }
       
+      // Handle monthly spending questions with DETERMINISTIC calculation
       if (monthQuestion) {
-        const monthName = monthQuestion[2].toLowerCase();
+        const monthName = monthQuestion[3].toLowerCase();
         const monthlySpending = this.calculateMonthlySpending(transactions, monthName);
         
         if (monthlySpending.found) {
@@ -101,13 +109,14 @@ export class APIHandlers {
           });
         } else {
           return new Response(JSON.stringify({
-            response: `I don't have spending data for ${monthName}. Your available data shows spending in the current month ($${financialContext.totalExpenses.toFixed(2)}) and sample historical data. You can add historical transactions in the Budget Manager tab.`
+            response: `I don't have spending data for ${monthName}. Your available data shows spending in the current month ($${financialContext.totalExpenses.toFixed(2)}).`
           }), {
             headers: { 'Content-Type': 'application/json' }
           });
         }
       }
 
+      // Handle balance questions with DETERMINISTIC calculation
       if (balanceQuestion) {
         return new Response(JSON.stringify({
           response: `Your current balance is $${financialContext.balance.toFixed(2)}. You have $${financialContext.totalIncome.toFixed(2)} in total income and $${financialContext.totalExpenses.toFixed(2)} in expenses across ${financialContext.transactionCount} transactions.`
@@ -116,8 +125,9 @@ export class APIHandlers {
         });
       }
 
+      // Handle category questions with DETERMINISTIC calculation
       if (categoryQuestion) {
-        const category = (categoryQuestion[1] || categoryQuestion[2]).toLowerCase();
+        const category = categoryQuestion[2].toLowerCase();
         const categoryAmount = financialContext.categoryBreakdown[category] || 0;
         
         if (categoryAmount > 0) {
@@ -136,8 +146,9 @@ export class APIHandlers {
         }
       }
 
-      // Now check if this is a transaction request (after all question checks)
-      const transactionIntent = await this.parseTransactionIntent(message);
+      // Check if this is a transaction request (keep this separate)
+      const isQuestion = /^(how much|what|when|where|why|which|who|can you|could you|tell me|show me)/i.test(message.trim());
+      const transactionIntent = !isQuestion ? await this.parseTransactionIntent(message) : null;
 
       if (transactionIntent && transactionIntent.isTransaction) {
         try {
@@ -169,45 +180,67 @@ export class APIHandlers {
         }
       }
 
-      // Try to use Cloudflare AI for other queries
+      // ========== PURE LLM APPROACH ==========
+      // Let the AI figure out what the user is asking and compute the answer
+      
+      // Prepare detailed financial data for the LLM
+      const monthlyData = this.calculateMonthlyBreakdownForAllMonths(transactions);
+      const dailySpendingData = this.calculateDailySpendingSummary(transactions); // Pre-calculate daily spending
+      const categoryData = Object.entries(categoryBreakdown)
+        .sort(([,a], [,b]) => b - a)
+        .map(([cat, amt]) => `${cat}: $${amt.toFixed(2)}`)
+        .join(', ');
+
+      // Build a comprehensive system prompt with ALL financial data
+      const systemPrompt = `You are an intelligent financial assistant with complete access to the user's financial data. Your job is to answer their questions accurately using ONLY the provided data.
+
+CRITICAL RULES:
+1. NEVER make up numbers or guess - use ONLY the data provided below
+2. Be specific with numbers - always include dollar amounts and transaction counts
+3. If you don't have data for a specific period, say so clearly
+4. Keep responses concise (under 150 words) but informative
+5. For daily spending questions, use the DAILY SPENDING BREAKDOWN section
+
+USER'S FINANCIAL DATA:
+━━━━━━━━━━━━━━━━━━━━
+Current Balance: $${balance.toFixed(2)}
+Total Income: $${totalIncome.toFixed(2)}
+Total Expenses: $${totalExpenses.toFixed(2)}
+Total Transactions: ${transactions.length}
+
+SPENDING BY CATEGORY (all-time):
+${categoryData || 'No expenses recorded yet'}
+
+MONTHLY SPENDING BREAKDOWN (2025):
+${monthlyData}
+
+DAILY SPENDING BREAKDOWN (recent months):
+${dailySpendingData}
+
+━━━━━━━━━━━━━━━━━━━━
+
+Now answer the user's question using ONLY the data above. Be precise and cite specific numbers.`;
+
       try {
-        // Create a more concise system prompt
-        const systemPrompt = `You are a personal finance assistant. The user has:
-- Balance: $${financialContext.balance.toFixed(2)}
-- Income: $${financialContext.totalIncome.toFixed(2)}
-- Expenses: $${financialContext.totalExpenses.toFixed(2)}
-- Top spending: ${Object.entries(financialContext.categoryBreakdown)
-  .sort(([,a], [,b]) => b - a)
-  .slice(0, 3)
-  .map(([cat, amt]) => `${cat} $${amt.toFixed(2)}`)
-  .join(', ')}
+        // Add timeout to prevent infinite waiting
+        const response = await Promise.race([
+          this.env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: message }
+            ],
+            max_tokens: 512 // Reduced since we're providing pre-calculated data
+          }),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('AI request timed out after 30 seconds')), 30000)
+          )
+        ]) as any;
 
-Answer their specific question using this data. Keep responses under 150 words and be specific.`;
-
-        const response = await this.env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
-          messages: [
-            {
-              role: 'system',
-              content: systemPrompt
-            },
-            {
-              role: 'user',
-              content: message
-            }
-          ]
-        });
-
-        // Better response handling
         const aiResponse = response as any;
-        let responseText = '';
+        let responseText = aiResponse?.response || '';
         
-        if (aiResponse && aiResponse.response) {
-          responseText = aiResponse.response;
-        } else if (aiResponse && typeof aiResponse === 'string') {
-          responseText = aiResponse;
-        } else {
-          // Create a personalized fallback based on financial data
-          responseText = `Based on your current finances: You have a balance of $${financialContext.balance.toFixed(2)} with $${financialContext.totalExpenses.toFixed(2)} in expenses. Your top spending category is ${Object.entries(financialContext.categoryBreakdown).sort(([,a], [,b]) => b - a)[0]?.[0] || 'other'} at $${Object.entries(financialContext.categoryBreakdown).sort(([,a], [,b]) => b - a)[0]?.[1]?.toFixed(2) || '0'}. ${financialContext.balance > 0 ? 'You\'re doing well keeping a positive balance!' : 'Consider reducing expenses to improve your balance.'}`;
+        if (!responseText) {
+          responseText = `I have access to your financial data: Balance is $${balance.toFixed(2)}, with $${totalExpenses.toFixed(2)} in total expenses across ${transactions.length} transactions. What would you like to know?`;
         }
 
         return new Response(JSON.stringify({
@@ -217,22 +250,83 @@ Answer their specific question using this data. Keep responses under 150 words a
         });
       } catch (aiError) {
         console.error('AI Error:', aiError);
-        // Provide intelligent fallback with actual financial data
-        const intelligentFallback = `Based on your financial data: You currently have a balance of $${financialContext.balance.toFixed(2)}. You've spent $${financialContext.totalExpenses.toFixed(2)} across ${financialContext.transactionCount} transactions. Your highest spending category is ${Object.entries(financialContext.categoryBreakdown).sort(([,a], [,b]) => b - a)[0]?.[0] || 'other'} at $${Object.entries(financialContext.categoryBreakdown).sort(([,a], [,b]) => b - a)[0]?.[1]?.toFixed(2) || '0'}. ${financialContext.balance > financialContext.totalExpenses * 0.3 ? 'Your finances look healthy!' : 'Consider creating a budget to better manage expenses.'}`;
-        
         return new Response(JSON.stringify({
-          response: intelligentFallback
+          response: `I have access to your financial data but encountered an issue. Your current balance is $${balance.toFixed(2)} with $${totalExpenses.toFixed(2)} in expenses. Please try rephrasing your question.`
         }), {
           headers: { 'Content-Type': 'application/json' }
         });
       }
     } catch (error) {
+      console.error('getAIAdvice error:', error);
       return new Response(JSON.stringify({
         response: 'I can help you manage your finances! Try asking about budgeting, saving, or investment strategies.'
       }), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
+  }
+
+
+  // Helper: Calculate monthly breakdown for all months
+  private calculateMonthlyBreakdownForAllMonths(transactions: any[]): string {
+    const byMonth: { [key: string]: { expenses: number; income: number; count: number } } = {};
+    
+    transactions.forEach(t => {
+      const monthKey = t.date ? t.date.slice(0, 7) : 'Unknown'; // YYYY-MM
+      if (!byMonth[monthKey]) byMonth[monthKey] = { expenses: 0, income: 0, count: 0 };
+      byMonth[monthKey].count++;
+      if (t.type === 'expense') byMonth[monthKey].expenses += t.amount;
+      if (t.type === 'income') byMonth[monthKey].income += t.amount;
+    });
+
+    const formatted = Object.entries(byMonth)
+      .sort(([a], [b]) => b.localeCompare(a))
+      .slice(0, 12)
+      .map(([month, data]) => {
+        const monthStr = this.formatMonthKey(month);
+        return `${monthStr}: $${data.expenses.toFixed(2)} spent, $${data.income.toFixed(2)} earned (${data.count} transactions)`;
+      })
+      .join('\n');
+
+    return formatted || 'No monthly data available';
+  }
+
+  // Helper: Format YYYY-MM to readable month name
+  private formatMonthKey(monthKey: string): string {
+    if (monthKey === 'Unknown') return 'Unknown';
+    const [year, month] = monthKey.split('-');
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${monthNames[parseInt(month) - 1]} ${year}`;
+  }
+
+  // Helper: Pre-calculate daily spending to help AI answer daily spending questions
+  private calculateDailySpendingSummary(transactions: any[]): string {
+    const dailySpending: { [key: string]: { total: number; count: number; categories: { [key: string]: number } } } = {};
+    
+    // Group expenses by date
+    transactions
+      .filter(t => t.type === 'expense' && t.date)
+      .forEach(t => {
+        if (!dailySpending[t.date]) {
+          dailySpending[t.date] = { total: 0, count: 0, categories: {} };
+        }
+        dailySpending[t.date].total += t.amount;
+        dailySpending[t.date].count++;
+        dailySpending[t.date].categories[t.category] = (dailySpending[t.date].categories[t.category] || 0) + t.amount;
+      });
+
+    // Format for LLM (sorted by date, most recent first, limit to last 90 days)
+    const formatted = Object.entries(dailySpending)
+      .sort(([a], [b]) => b.localeCompare(a))
+      .slice(0, 90)
+      .map(([date, data]) => {
+        const topCategory = Object.entries(data.categories)
+          .sort(([,a], [,b]) => b - a)[0];
+        return `${date}: $${data.total.toFixed(2)} spent (${data.count} transactions, top: ${topCategory[0]} $${topCategory[1].toFixed(2)})`;
+      })
+      .join('\n');
+
+    return formatted || 'No daily spending data available';
   }
 
   private calculateMonthlySpending(transactions: any[], monthName: string) {
@@ -469,6 +563,18 @@ Answer their specific question using this data. Keep responses under 150 words a
 
 Message: "${message}"
 
+IMPORTANT: If the message is asking a QUESTION (starts with "how much", "what", "when", "where", etc.), respond with {"isTransaction": false}
+
+Examples of QUESTIONS (NOT transactions):
+- "How much did I spend in October?" → {"isTransaction": false}
+- "What's my balance?" → {"isTransaction": false}
+- "How much did I spend on food?" → {"isTransaction": false}
+
+Examples of TRANSACTIONS:
+- "Add $50 grocery expense" → {"isTransaction": true, ...}
+- "I spent $25 on gas" → {"isTransaction": true, ...}
+- "Record $100 income" → {"isTransaction": true, ...}
+
 If this is a transaction request, respond with ONLY a JSON object (no extra text):
 {
   "isTransaction": true,
@@ -483,6 +589,7 @@ If NOT a transaction request, respond with:
 {"isTransaction": false}
 
 Rules:
+- Questions about spending are NOT transactions
 - Extract the amount (e.g., "50 dollar" → 50, "$25" → 25)
 - Create a short description (e.g., "food expense" → "Food purchase", "grocery" → "Groceries")
 - Choose appropriate category based on context
@@ -784,215 +891,28 @@ Respond with ONLY the JSON object, no other text.`;
         return new Response(JSON.stringify({ success: false, error: 'Missing image' }), { status: 400 });
       }
 
-      // Convert data URL/base64 -> byte array for CF AI
-      const base64 = (body.image.includes(',') ? body.image.split(',')[1] : body.image).trim();
-      
-      console.log('📸 Receipt scan request received, image size:', base64.length);
+      // Create receipt scanner instance
+      const scanner = new ReceiptScanner(this.env.AI, this.state.storage);
 
-      // Sophisticated prompt for better extraction
-      const prompt = `You are a receipt data extraction expert. Analyze this receipt image carefully and extract key information.
+      // Scan the receipt
+      const result = await scanner.scanReceipt(body.image);
 
-Your task:
-1. Find the MERCHANT/STORE NAME (usually at the top, largest text)
-2. Find the TOTAL AMOUNT (look for "Total", "Grand Total", "Amount Due" - the final amount paid)
-3. Find the DATE (transaction date in any format)
-4. Determine the CATEGORY based on the merchant type
-
-Respond with ONLY this JSON format (no markdown, no explanation):
-{
-  "merchant": "exact store name",
-  "amount": 0.00,
-  "date": "YYYY-MM-DD",
-  "category": "one of: food, transportation, housing, entertainment, shopping, healthcare, other"
-}
-
-Category guidelines:
-- food: restaurants, groceries, cafes, food delivery
-- transportation: gas stations, uber, parking, auto services
-- shopping: retail stores, clothing, electronics, general merchandise
-- entertainment: movies, games, subscriptions, events
-- healthcare: pharmacy, medical, gym, health services
-- housing: rent, utilities, home improvement
-- other: anything else
-
-If date is unclear, use: ${new Date().toISOString().slice(0,10)}
-If amount is unclear, estimate from visible numbers.
-
-RESPOND WITH ONLY THE JSON OBJECT.`;
-
-      // One-time license acceptance (required for Meta Llama models)
-      const agreed = await this.state.storage.get('llama_agreed');
-      if (!agreed) {
-        try {
-          console.log('Accepting Llama license...');
-          await this.env.AI.run('@cf/meta/llama-3.2-11b-vision-instruct', {
-            prompt: 'agree',
-            max_tokens: 10
-          });
-          await this.state.storage.put('llama_agreed', true);
-          console.log('✅ Llama license accepted');
-        } catch (e) {
-          console.warn('⚠️ License agreement step failed (may already be accepted):', e);
-        }
-      }
-
-      // Call CF AI vision model with CORRECT Cloudflare API format
-      let result;
-      try {
-        console.log('🤖 Calling Llama 3.2 Vision model...');
-        result = await Promise.race([
-          this.env.AI.run('@cf/meta/llama-3.2-11b-vision-instruct', {
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: prompt },
-                  { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } }
-                ]
-              }
-            ],
-            max_tokens: 512
-          }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('AI request timed out after 45 seconds')), 45000))
-        ]) as any;
-        console.log('✅ AI response received:', JSON.stringify(result).substring(0, 200));
-      } catch (aiError: any) {
-        console.error('AI model error:', aiError);
-        // Return a structured error response instead of throwing
-        return new Response(JSON.stringify({
-          success: false,
-          error: 'AI service temporarily unavailable',
-          note: 'AI vision model failed. Please enter transaction details manually.',
-          merchant: '',
-          amount: 0,
-          date: new Date().toISOString().slice(0,10),
-          category: 'other'
-        }), {
-          status: 200, // Return 200 so frontend can handle gracefully
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-
-      let merchant = '';
-      let amount = 0;
-      let date = new Date().toISOString().slice(0,10);
-      let category = 'other';
-      let note = '';
-      let modelUsed = '@cf/meta/llama-3.2-11b-vision-instruct';
-
-      const rawText = (result?.response || '').toString();
-      // Parse AI response
-      if (rawText) {
-        try {
-          let jsonStr = rawText;
-
-          // Remove markdown code blocks if present
-          jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '');
-
-          // Try to extract JSON object from response
-          const jsonMatch = jsonStr.match(/\{[\s\S]*?\}/);
-          if (jsonMatch) {
-            const parsed = JSON.parse(jsonMatch[0]);
-            merchant = (parsed.merchant || '').toString().trim();
-            amount = parseFloat(parsed.amount) || 0;
-            date = parsed.date || date;
-            category = parsed.category || 'other';
-            note = 'Parsed successfully';
-          } else {
-            note = 'No JSON object found in response';
-          }
-        } catch (e) {
-          console.warn('JSON parse failed', e);
-          note = 'json_parse_failed';
-        }
-      } else {
-        note = 'no_response_from_model';
-      }
-
-      // Fallback to LLaVA if primary returned empty/weak result
-      const insufficient = !merchant || amount <= 0;
-      if (insufficient) {
-        try {
-          console.log('🔁 Falling back to LLaVA model...');
-          const fallback = await this.env.AI.run('@cf/llava-v1.5-7b', {
-            prompt,
-            image: `data:image/jpeg;base64,${base64}`,
-            max_tokens: 512
-          }) as any;
-          if (fallback?.response) {
-            let s = fallback.response.replace(/```json\s*/g, '').replace(/```\s*/g, '');
-            const m = s.match(/\{[\s\S]*?\}/);
-            if (m) {
-              const p = JSON.parse(m[0]);
-              merchant = merchant || (p.merchant || '').toString().trim();
-              amount = amount > 0 ? amount : (parseFloat(p.amount) || 0);
-              date = p.date || date;
-              category = p.category || category;
-              modelUsed = '@cf/llava-v1.5-7b';
-              note = 'parsed_successfully_fallback_json';
-            }
-          }
-        } catch (e) {
-          console.warn('Fallback model failed:', e);
-          note = note || 'fallback_failure';
-        }
-      }
-
-      // Heuristic extraction from raw text when JSON failed
-      if ((amount <= 0 || !merchant) && rawText) {
-        try {
-          const text = rawText.replace(/\s+/g, ' ').trim();
-          // Total amount heuristics
-          const totalRegex = /(receipt\s*total|grand\s*total|amount\s*due|total)\s*[:\-]?\s*\$?\s*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)/i;
-          const mTotal = text.match(totalRegex);
-          if (mTotal && !isNaN(parseFloat(mTotal[2].replace(/,/g, '')))) {
-            amount = parseFloat(mTotal[2].replace(/,/g, ''));
-          } else {
-            const moneyMatches = [...text.matchAll(/\$?\s*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2}))/g)]
-              .map(x => parseFloat(x[1].replace(/,/g, ''))) 
-              .filter(n => !isNaN(n));
-            if (moneyMatches.length) amount = Math.max(amount || 0, ...moneyMatches);
-          }
-          // Merchant guess from first lines
-          const lines = rawText.split(/\n|\\n/).map((l: string) => l.trim()).filter((l: string) => Boolean(l));
-          const stopWords = /(receipt|bill\s*to|ship\s*to|date|qty|description|amount|unit\s*price|payment|instruction|terms|conditions)/i;
-          const candidate = lines.find((l: string) => /[A-Z]/.test(l) && !stopWords.test(l) && l.length <= 40 && l.length >= 3);
-          if (!merchant && candidate) merchant = candidate.replace(/[^A-Za-z0-9 .,&'-]/g, '').trim();
-          if (!note || note.startsWith('json_') || note.startsWith('no_')) note = 'heuristic_extraction';
-        } catch (e) {
-          console.warn('Heuristic extraction failed:', e);
-        }
-      }
-
-      const debug = {
-        model: modelUsed,
-        note,
-        hadJson: /\{[\s\S]*?\}/.test(rawText || ''),
-        responseSnippet: rawText ? rawText.substring(0, 350) : ''
-      };
-      const success = amount > 0 && merchant && merchant.length > 1;
-
-      // Return structured response with debugging info
-      return new Response(JSON.stringify({
-        success,
-        merchant,
-        amount,
-        date,
-        category,
-        note,
-        model: modelUsed,
-        raw_text: rawText,
-        debug
-      }), {
-        status: 200,
+      // Return the result
+      return new Response(JSON.stringify(result), {
+        status: result.success ? 200 : 200, // Always return 200 for graceful frontend handling
         headers: { 'Content-Type': 'application/json' }
       });
+
     } catch (error: any) {
       console.error('scanReceiptLLM error:', error);
       return new Response(JSON.stringify({
         success: false,
         error: error?.message || 'Unknown error',
-        note: 'Server error during receipt scan'
+        note: 'Server error during receipt scan',
+        merchant: '',
+        amount: 0,
+        date: new Date().toISOString().slice(0, 10),
+        category: 'other'
       }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' }
