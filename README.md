@@ -1,5 +1,10 @@
 # 💰 AI-Powered Personal Finance Assistant
 
+[![CI](https://github.com/aryaninus123/cf_ai_finance_agent/actions/workflows/ci.yml/badge.svg)](https://github.com/aryaninus123/cf_ai_finance_agent/actions/workflows/ci.yml)
+[![Deploy](https://github.com/aryaninus123/cf_ai_finance_agent/actions/workflows/deploy.yml/badge.svg)](https://github.com/aryaninus123/cf_ai_finance_agent/actions/workflows/deploy.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange.svg)](https://workers.cloudflare.com/)
+
 A comprehensive financial management application built on **Cloudflare's edge infrastructure** with intelligent AI capabilities, computer vision receipt scanning, real-time analytics, and beautiful modern UI.
 
 🚀 **Live Demo**: [https://finance-agent.aryaninus.workers.dev](https://finance-agent.aryaninus.workers.dev)
@@ -114,6 +119,45 @@ npx wrangler dev --remote
 npm run build
 ```
 
+---
+
+## 🔄 CI/CD Pipeline
+
+This project includes automated CI/CD workflows using **GitHub Actions**.
+
+### **Continuous Integration (CI)**
+
+Runs on every push and pull request:
+- ✅ TypeScript type checking
+- ✅ Build validation
+- ✅ Security audit
+- ✅ Wrangler configuration validation
+
+### **Continuous Deployment (CD)**
+
+Automatically deploys to Cloudflare Workers when code is merged to `main`:
+- 🚀 Automatic deployment on merge
+- 🏥 Post-deployment health checks
+- 🔄 Manual deployment trigger available
+
+### **Setup GitHub Actions**
+
+1. **Add GitHub Secrets** (Settings → Secrets → Actions):
+   ```
+   CLOUDFLARE_API_TOKEN=<your-api-token>
+   CLOUDFLARE_ACCOUNT_ID=<your-account-id>
+   ```
+
+2. **Get Cloudflare API Token**:
+   - Visit: https://dash.cloudflare.com/profile/api-tokens
+   - Create token with "Edit Cloudflare Workers" permissions
+
+3. **Get Account ID**:
+   - Visit: https://dash.cloudflare.com/
+   - Click "Workers & Pages"
+   - Account ID shown on right sidebar
+
+**For detailed CI/CD setup instructions**, see [`.github/workflows/README.md`](.github/workflows/README.md)
 
 ---
 

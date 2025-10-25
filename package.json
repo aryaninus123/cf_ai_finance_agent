@@ -7,15 +7,25 @@
     "deploy": "wrangler deploy",
     "build": "tsc",
     "start": "wrangler dev --local",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"⚠️  No tests yet - add tests to improve code quality\" && exit 0",
+    "type-check": "tsc --noEmit",
+    "lint": "echo \"Add ESLint for code linting\"",
+    "ci": "npm run type-check && npm run build && npm test"
   },
-  "keywords": ["finance", "ai", "cloudflare", "agents"],
+  "keywords": [
+    "finance",
+    "ai",
+    "cloudflare",
+    "agents"
+  ],
   "author": "",
   "license": "ISC",
   "description": "AI-powered personal finance assistant built on Cloudflare Agents",
   "dependencies": {
     "@cloudflare/ai": "^1.2.2",
+    "@langchain/core": "^1.0.1",
     "agents": "^0.2.6",
+    "langchain": "^1.0.1",
     "wrangler": "^4.40.2"
   }
 }
