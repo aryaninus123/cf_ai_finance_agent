@@ -6,6 +6,10 @@ compatibility_flags = ["nodejs_compat"]
 [ai]
 binding = "AI"
 
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "finance-knowledge"
+
 [[durable_objects.bindings]]
 name = "FinanceAgent"
 class_name = "FinanceAgent"
@@ -15,18 +19,4 @@ tag = "v1"
 new_sqlite_classes = ["FinanceAgent"]
 
 [vars]
-ENVIRONMENT = "development"
-
-# Production-specific configuration
-[env.production]
-
-[env.production.ai]
-binding = "AI"
-
-[env.production.durable_objects]
-bindings = [
-  { name = "FinanceAgent", class_name = "FinanceAgent" }
-]
-
-[env.production.vars]
 ENVIRONMENT = "production"
