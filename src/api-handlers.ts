@@ -1738,5 +1738,193 @@ Respond with ONLY the JSON object, no other text.`;
       });
     }
   }
+
+  /**
+   * Generate AI-powered financial insights
+   */
+  async getAIInsights(request: Request): Promise<Response> {
+    try {
+      // Get all transactions
+      const transactions = await this.state.storage.get('transactions') as any[] || [];
+
+      // Get budgets
+      const budgets = await this.state.storage.get('budgets') as Record<string, number> || {};
+
+      // Calculate current month data
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+
+      const monthlyTransactions = transactions.filter(t => {
+        const date = new Date(t.date);
+        return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+      });
+
+      const monthlyIncome = monthlyTransactions
+        .filter(t => t.type === 'income')
+        .reduce((sum, t) => sum + t.amount, 0);
+
+      const monthlyExpenses = monthlyTransactions
+        .filter(t => t.type === 'expense')
+        .reduce((sum, t) => sum + t.amount, 0);
+
+      // Calculate category spending
+      const categorySpending: Record<string, number> = {};
+      monthlyTransactions
+        .filter(t => t.type === 'expense')
+        .forEach(t => {
+          categorySpending[t.category] = (categorySpending[t.category] || 0) + t.amount;
+        });
+
+      // Calculate budget performance
+      const budgetPerformance: Array<{category: string, spent: number, budget: number, percentage: number}> = [];
+      Object.entries(categorySpending).forEach(([category, spent]) => {
+        const budget = budgets[category] || 0;
+        if (budget > 0) {
+          budgetPerformance.push({
+            category,
+            spent,
+            budget,
+            percentage: (spent / budget) * 100
+          });
+        }
+      });
+
+      // Sort by percentage over budget
+      budgetPerformance.sort((a, b) => b.percentage - a.percentage);
+
+      // Build prompt for LLM
+      const prompt = `You are a financial advisor analyzing someone's monthly finances. Provide 3-4 specific, actionable insights based on this data:
+
+MONTHLY SUMMARY:
+- Income: $${monthlyIncome.toFixed(2)}
+- Expenses: $${monthlyExpenses.toFixed(2)}
+- Net: $${(monthlyIncome - monthlyExpenses).toFixed(2)}
+- Savings Rate: ${monthlyIncome > 0 ? ((monthlyIncome - monthlyExpenses) / monthlyIncome * 100).toFixed(1) : 0}%
+
+SPENDING BY CATEGORY:
+${Object.entries(categorySpending)
+  .sort((a, b) => b[1] - a[1])
+  .map(([cat, amount]) => `- ${cat}: $${amount.toFixed(2)} (${((amount/monthlyExpenses)*100).toFixed(1)}%)`)
+  .join('\n')}
+
+BUDGET PERFORMANCE:
+${budgetPerformance.length > 0
+  ? budgetPerformance.map(p => `- ${p.category}: $${p.spent.toFixed(2)} / $${p.budget.toFixed(2)} (${p.percentage.toFixed(1)}%)`)
+    .join('\n')
+  : 'No budgets set'}
+
+Provide insights in this EXACT format (each insight on a new line, starting with an emoji):
+- Use emojis: 💰 for savings, 📊 for spending patterns, 🚨 for warnings, ✅ for achievements, 💡 for tips
+- Keep each insight to 1-2 sentences max
+- Be specific with numbers
+- Focus on actionable advice
+- Format: "emoji <strong>Category:</strong> specific insight with numbers"
+
+Example format:
+💰 <strong>Savings:</strong> You're saving 25% of your income ($500) - that's excellent!
+📊 <strong>Top spending:</strong> Food accounts for 35% of expenses. Consider meal planning to reduce costs.
+🚨 <strong>Budget alert:</strong> You're 20% over budget on transportation ($120 overspent).
+
+Generate 3-4 insights now:`;
+
+      // Call LLM
+      const response = await this.env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+        messages: [
+          { role: 'system', content: 'You are a concise financial advisor. Provide exactly 3-4 bullet point insights, each starting with an emoji and following the format shown.' },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 400
+      }) as any;
+
+      let insights = response?.response || '';
+
+      // Clean up the response
+      insights = insights
+        .split('\n')
+        .filter((line: string) => line.trim().length > 0)
+        .filter((line: string) => /^[🏆💰📊🚨✅⚠️💡📈📉🎯]/.test(line.trim())) // Only lines starting with emojis
+        .map((line: string) => line.trim())
+        .slice(0, 4) // Max 4 insights
+        .join('\n');
+
+      // Fallback if AI fails
+      if (!insights || insights.length < 20) {
+        insights = this.generateFallbackInsights(monthlyIncome, monthlyExpenses, categorySpending, budgetPerformance);
+      }
+
+      return new Response(JSON.stringify({
+        success: true,
+        insights: insights
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+    } catch (error) {
+      console.error('AI insights error:', error);
+
+      // Return fallback insights on error
+      const transactions = await this.state.storage.get('transactions') as any[] || [];
+      const now = new Date();
+      const monthlyTransactions = transactions.filter(t => {
+        const date = new Date(t.date);
+        return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+      });
+
+      const monthlyIncome = monthlyTransactions
+        .filter(t => t.type === 'income')
+        .reduce((sum, t) => sum + t.amount, 0);
+      const monthlyExpenses = monthlyTransactions
+        .filter(t => t.type === 'expense')
+        .reduce((sum, t) => sum + t.amount, 0);
+
+      return new Response(JSON.stringify({
+        success: true,
+        insights: `💰 <strong>Monthly summary:</strong> Income: $${monthlyIncome.toFixed(2)}, Expenses: $${monthlyExpenses.toFixed(2)}\n📊 <strong>Net position:</strong> ${monthlyIncome > monthlyExpenses ? 'Saving' : 'Overspending'} $${Math.abs(monthlyIncome - monthlyExpenses).toFixed(2)} this month`
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  }
+
+  /**
+   * Generate fallback insights when AI fails
+   */
+  private generateFallbackInsights(
+    income: number,
+    expenses: number,
+    categorySpending: Record<string, number>,
+    budgetPerformance: Array<{category: string, spent: number, budget: number, percentage: number}>
+  ): string {
+    const insights: string[] = [];
+
+    // Financial health insight
+    if (income > expenses) {
+      const savingsRate = ((income - expenses) / income * 100).toFixed(1);
+      insights.push(`💰 <strong>Great job!</strong> You're saving ${savingsRate}% of your income ($${(income - expenses).toFixed(2)}) this month.`);
+    } else {
+      const deficit = (expenses - income).toFixed(2);
+      insights.push(`⚠️ <strong>Heads up:</strong> You're spending $${deficit} more than your income this month.`);
+    }
+
+    // Top spending category
+    const sortedCategories = Object.entries(categorySpending).sort((a, b) => b[1] - a[1]);
+    if (sortedCategories.length > 0) {
+      const [category, amount] = sortedCategories[0];
+      const percentage = ((amount / expenses) * 100).toFixed(1);
+      insights.push(`📊 <strong>Top spending:</strong> ${category.charAt(0).toUpperCase() + category.slice(1)} accounts for ${percentage}% of expenses ($${amount.toFixed(2)}).`);
+    }
+
+    // Budget performance
+    const overBudget = budgetPerformance.filter(p => p.percentage > 100);
+    if (overBudget.length > 0) {
+      const worst = overBudget[0];
+      insights.push(`🚨 <strong>Budget alert:</strong> ${worst.category.charAt(0).toUpperCase() + worst.category.slice(1)} is ${(worst.percentage - 100).toFixed(1)}% over budget ($${(worst.spent - worst.budget).toFixed(2)} overspent).`);
+    } else if (budgetPerformance.length > 0) {
+      insights.push(`✅ <strong>Well done!</strong> You're staying within your budgets across all categories.`);
+    }
+
+    return insights.join('\n');
+  }
 }
 

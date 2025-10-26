@@ -3,6 +3,11 @@ import { APIHandlers } from './api-handlers';
 
 interface Env {
   AI: any;
+  VECTORIZE?: any;
+  CHROMA_URL?: string;
+  CHROMA_API_KEY?: string;
+  CHROMA_TENANT?: string;
+  CHROMA_DATABASE?: string;
   FinanceAgent: DurableObjectNamespace;
 }
 
@@ -81,6 +86,25 @@ export class FinanceAgent {
       return this.apiHandlers.scanReceiptLLM(request);
     }
 
+    // RAG knowledge base initialization endpoint
+    if (url.pathname === '/api/init-knowledge-base' && request.method === 'POST') {
+      return this.apiHandlers.initializeKnowledgeBase();
+    }
+
+    // Conversation management endpoints
+    if (url.pathname === '/api/conversation/history' && request.method === 'GET') {
+      return this.apiHandlers.getConversationHistory(request);
+    }
+
+    if (url.pathname === '/api/conversation/clear' && request.method === 'POST') {
+      return this.apiHandlers.clearConversationHistory(request);
+    }
+
+    // AI insights endpoint
+    if (url.pathname === '/api/ai-insights') {
+      return this.apiHandlers.getAIInsights(request);
+    }
+
     return new Response('Not Found', { status: 404 });
   }
 
@@ -147,8 +171,13 @@ export class FinanceAgent {
             <div id="chatTab" class="tab-content active">
                 <div class="chat-container">
                     <div class="chat-header">
-                        <h1>Your AI Financial Assistant</h1>
-                        <p>I have access to all your financial data and can provide intelligent insights!</p>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <h1>Your AI Financial Assistant</h1>
+                                <p>I have access to all your financial data and can provide intelligent insights!</p>
+                            </div>
+                            <button id="clearChatBtn" style="padding: 8px 16px; background: #ff6b6b; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px;">Clear Chat</button>
+                        </div>
                     </div>
                     
                     <div class="chat-messages" id="chatMessages">
@@ -1753,20 +1782,38 @@ function loadBudgetPerformance(categoryBreakdown, budgets) {
 
 async function loadAIInsights(data) {
     const container = document.getElementById('aiInsights');
-    
-    // Generate smart insights based on actual data
-    const insights = [];
-    const now = new Date();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
-    
-    // Calculate current month's spending
-    let monthlyIncome = 0;
-    let monthlyExpenses = 0;
-    const monthlyCategories = {};
-    
-    data.transactions.forEach(t => {
-        const txDate = new Date(t.timestamp);
+
+    // Show loading state
+    container.innerHTML = '<div style="text-align: center; color: #666; padding: 2rem;"><div class="spinner"></div> Generating AI insights...</div>';
+
+    try {
+        // Fetch AI-generated insights
+        const response = await fetch('/api/ai-insights');
+        const result = await response.json();
+
+        if (result.success && result.insights) {
+            // Parse insights (they come as newline-separated strings)
+            const insightLines = result.insights.split('\\n').filter(line => line.trim());
+            container.innerHTML = insightLines.map(insight =>
+                \`<p style="margin-bottom: 1rem; line-height: 1.6;">\${insight}</p>\`
+            ).join('');
+        } else {
+            throw new Error('Failed to load insights');
+        }
+    } catch (error) {
+        console.error('AI insights error:', error);
+
+        // Fallback to basic insights
+        const now = new Date();
+        const currentMonth = now.getMonth();
+        const currentYear = now.getFullYear();
+
+        let monthlyIncome = 0;
+        let monthlyExpenses = 0;
+        const monthlyCategories = {};
+
+        data.transactions.forEach(t => {
+            const txDate = new Date(t.timestamp);
         if (txDate.getMonth() === currentMonth && txDate.getFullYear() === currentYear) {
             if (t.type === 'income') {
                 monthlyIncome += t.amount;
@@ -1813,18 +1860,19 @@ async function loadAIInsights(data) {
         else if (percentage > 85) nearLimitCount++;
     });
     
-    if (overBudgetCount > 0) {
-        const word = overBudgetCount > 1 ? 'ies' : 'y';
-        insights.push(\`🚨 <strong>Budget alert:</strong> You're over budget in \${overBudgetCount} categor\${word}. Review these expenses to get back on track.\`);
-    } else if (nearLimitCount > 0) {
-        const word = nearLimitCount > 1 ? 'ies' : 'y';
-        insights.push(\`⚠️ <strong>Watch out:</strong> You're approaching your budget limit in \${nearLimitCount} categor\${word}. Plan ahead for the rest of the month.\`);
-    } else {
-        insights.push(\`✅ <strong>Well done!</strong> You're staying within your budgets across all categories. Keep up the good financial habits!\`);
+        if (overBudgetCount > 0) {
+            const word = overBudgetCount > 1 ? 'ies' : 'y';
+            insights.push(\`🚨 <strong>Budget alert:</strong> You're over budget in \${overBudgetCount} categor\${word}. Review these expenses to get back on track.\`);
+        } else if (nearLimitCount > 0) {
+            const word = nearLimitCount > 1 ? 'ies' : 'y';
+            insights.push(\`⚠️ <strong>Watch out:</strong> You're approaching your budget limit in \${nearLimitCount} categor\${word}. Plan ahead for the rest of the month.\`);
+        } else {
+            insights.push(\`✅ <strong>Well done!</strong> You're staying within your budgets across all categories. Keep up the good financial habits!\`);
+        }
+
+        // Display fallback insights
+        container.innerHTML = insights.map(insight => \`<p style="margin-bottom: 1rem; line-height: 1.6;">\${insight}</p>\`).join('');
     }
-    
-    // Display insights
-    container.innerHTML = insights.map(insight => \`<p style="margin-bottom: 1rem; line-height: 1.6;">\${insight}</p>\`).join('');
 }
 
 function showNotification(message, type = 'info') {
@@ -1911,6 +1959,56 @@ function hideTypingIndicator() {
     }
 }
 
+async function loadConversationHistory() {
+    try {
+        const response = await fetch('/api/conversation/history?conversationId=default');
+        const data = await response.json();
+
+        if (data.success && data.messages && data.messages.length > 0) {
+            const messagesContainer = document.getElementById('chatMessages');
+            if (messagesContainer) {
+                // Clear the container first
+                messagesContainer.innerHTML = '';
+
+                // Display each message from history
+                data.messages.forEach(msg => {
+                    if (msg.role === 'user' || msg.role === 'assistant') {
+                        addMessage(msg.content, msg.role === 'user');
+                    }
+                });
+            }
+        }
+    } catch (error) {
+        console.log('Could not load conversation history:', error);
+    }
+}
+
+async function clearConversationHistory() {
+    try {
+        const response = await fetch('/api/conversation/clear', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ conversationId: 'default' })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            // Clear the chat display
+            const messagesContainer = document.getElementById('chatMessages');
+            if (messagesContainer) {
+                messagesContainer.innerHTML = '';
+            }
+            // Show a confirmation message
+            addMessage('Conversation history cleared!', false);
+        }
+    } catch (error) {
+        console.log('Could not clear conversation history:', error);
+    }
+}
+
 async function sendMessage(message) {
     if (!message.trim()) return;
     
@@ -1923,15 +2021,26 @@ async function sendMessage(message) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ message })
+            body: JSON.stringify({ message, conversationId: 'default' })
         });
         
         const data = await response.json();
         hideTypingIndicator();
         addMessage(data.response || 'I apologize, but I\\'m having trouble processing your request right now. Please try again later.');
-        
-        // If a transaction was added, update the dashboard
-        if (data.action === 'expense_added' || data.action === 'income_added') {
+
+        // If function(s) were called, log them
+        if (data.functionsCalled && data.functionsCalled.length > 0) {
+            console.log(\`✅ Multi-Step Execution: \${data.stepsExecuted} function(s) executed:\`);
+            data.functionsCalled.forEach((funcName, i) => {
+                const result = data.functionResults[i];
+                console.log(\`  \${i + 1}. \${funcName} - \${result.success ? '✅' : '❌'} \${result.message}\`);
+            });
+        } else if (data.functionCalled) {
+            console.log(\`✅ Function executed: \${data.functionCalled}\`, data.functionResult);
+        }
+
+        // If any action was taken, update the dashboard
+        if (data.action || data.functionsCalled) {
             await updateDashboardData();
         }
     } catch (error) {
@@ -1985,10 +2094,14 @@ function sendSuggestion(suggestion) {
 document.addEventListener('DOMContentLoaded', function() {
     // Load real data first, then animate
     updateDashboardData();
+
+    // Load conversation history
+    loadConversationHistory();
     
     const chatInput = document.getElementById('chatInput');
     const sendButton = document.getElementById('sendButton');
-    
+    const clearChatBtn = document.getElementById('clearChatBtn');
+
     if (sendButton && chatInput) {
     sendButton.addEventListener('click', () => {
         const message = chatInput.value;
@@ -1997,6 +2110,14 @@ document.addEventListener('DOMContentLoaded', function() {
             chatInput.value = '';
         }
     });
+    }
+
+    if (clearChatBtn) {
+        clearChatBtn.addEventListener('click', () => {
+            if (confirm('Are you sure you want to clear the conversation history?')) {
+                clearConversationHistory();
+            }
+        });
     }
     
     if (chatInput) {
