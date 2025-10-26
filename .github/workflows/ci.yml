@@ -36,7 +36,7 @@ jobs:
           fi
           echo "Build successful: dist directory exists"
 
-  # Job 2: Test (placeholder for when you add tests)
+  # Job 2: Run Tests
   test:
     name: Run Tests
     runs-on: ubuntu-latest
@@ -57,12 +57,10 @@ jobs:
 
       - name: Run tests
         run: npm test
-        continue-on-error: true  # Allow to pass even if no tests yet
 
-      - name: Test placeholder notice
+      - name: Test results
         run: |
-          echo "⚠️  No tests implemented yet"
-          echo "Add tests to improve code quality and catch bugs early"
+          echo "✅ All tests passed!"
 
   # Job 3: Wrangler Validation
   validate-wrangler:

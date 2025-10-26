@@ -1,13 +1,16 @@
 {
   "name": "finance-agent",
   "version": "1.0.0",
+  "type": "module",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "build": "tsc",
     "start": "wrangler dev --local",
-    "test": "echo \"⚠️  No tests yet - add tests to improve code quality\" && exit 0",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
     "type-check": "tsc --noEmit",
     "lint": "echo \"Add ESLint for code linting\"",
     "ci": "npm run type-check && npm run build && npm test"
@@ -27,5 +30,9 @@
     "agents": "^0.2.6",
     "langchain": "^1.0.1",
     "wrangler": "^4.40.2"
+  },
+  "devDependencies": {
+    "@vitest/ui": "^4.0.3",
+    "vitest": "^4.0.3"
   }
 }

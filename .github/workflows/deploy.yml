@@ -1,7 +1,10 @@
 name: Deploy to Cloudflare
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
     branches:
       - main
   workflow_dispatch:  # Allow manual triggers
@@ -11,6 +14,8 @@ jobs:
   deploy:
     name: Deploy to Cloudflare Workers
     runs-on: ubuntu-latest
+    # Only deploy if CI succeeded (or if manually triggered)
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     environment:
       name: production
       url: https://finance-agent.aryaninus.workers.dev
