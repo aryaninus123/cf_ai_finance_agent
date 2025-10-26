@@ -2,11 +2,55 @@
 // This file contains all API endpoint logic extracted from simple-agent.ts
 
 import { ReceiptScanner } from './receipt-scanner';
+import { initializeKnowledgeBase } from './knowledge-base';
+import { retrieveContext, buildRAGPrompt, indexTransaction, suggestCategory } from './rag-handler';
+import { createVectorDB, getVectorDBName } from './vector-db-factory';
 
 interface Env {
   AI: any;
+  VECTORIZE?: any;
+  CHROMA_URL?: string;
+  CHROMA_API_KEY?: string;
+  CHROMA_TENANT?: string;
+  CHROMA_DATABASE?: string;
   FinanceAgent: DurableObjectNamespace;
   ENVIRONMENT?: string;
+}
+
+// Function calling tool definitions
+interface FunctionDefinition {
+  name: string;
+  description: string;
+  parameters: {
+    type: string;
+    properties: Record<string, any>;
+    required: string[];
+  };
+}
+
+interface FunctionCall {
+  name: string;
+  arguments: string;
+}
+
+interface FunctionResult {
+  success: boolean;
+  data?: any;
+  message: string;
+  action?: string;
+}
+
+interface ConversationMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: number;
+}
+
+interface Conversation {
+  id: string;
+  messages: ConversationMessage[];
+  startTime: number;
+  lastUpdated: number;
 }
 
 export class APIHandlers {
@@ -16,6 +60,414 @@ export class APIHandlers {
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
+  }
+
+  // ========== CONVERSATION MEMORY METHODS ==========
+
+  /**
+   * Save a message to the conversation history
+   */
+  async saveMessage(role: 'user' | 'assistant' | 'system', content: string, conversationId: string = 'default'): Promise<void> {
+    const conversations = await this.state.storage.get('conversations') as Record<string, Conversation> || {};
+
+    if (!conversations[conversationId]) {
+      conversations[conversationId] = {
+        id: conversationId,
+        messages: [],
+        startTime: Date.now(),
+        lastUpdated: Date.now()
+      };
+    }
+
+    const message: ConversationMessage = {
+      role,
+      content,
+      timestamp: Date.now()
+    };
+
+    conversations[conversationId].messages.push(message);
+    conversations[conversationId].lastUpdated = Date.now();
+
+    // Limit conversation history to last 50 messages to prevent memory bloat
+    if (conversations[conversationId].messages.length > 50) {
+      conversations[conversationId].messages = conversations[conversationId].messages.slice(-50);
+    }
+
+    await this.state.storage.put('conversations', conversations);
+  }
+
+  /**
+   * Load conversation history
+   */
+  async loadConversation(conversationId: string = 'default'): Promise<ConversationMessage[]> {
+    const conversations = await this.state.storage.get('conversations') as Record<string, Conversation> || {};
+    return conversations[conversationId]?.messages || [];
+  }
+
+  /**
+   * Get conversation context formatted for LLM
+   */
+  async getConversationContext(conversationId: string = 'default', limit: number = 10): Promise<string> {
+    const messages = await this.loadConversation(conversationId);
+    const recentMessages = messages.slice(-limit);
+
+    if (recentMessages.length === 0) {
+      return '';
+    }
+
+    return '\n\nPREVIOUS CONVERSATION:\n' + recentMessages.map(msg => {
+      const roleLabel = msg.role === 'user' ? 'User' : 'Assistant';
+      return `${roleLabel}: ${msg.content}`;
+    }).join('\n') + '\n\n';
+  }
+
+  /**
+   * Clear conversation history
+   */
+  async clearConversation(conversationId: string = 'default'): Promise<void> {
+    const conversations = await this.state.storage.get('conversations') as Record<string, Conversation> || {};
+    if (conversations[conversationId]) {
+      delete conversations[conversationId];
+      await this.state.storage.put('conversations', conversations);
+    }
+  }
+
+  /**
+   * Get all conversations
+   */
+  async getAllConversations(): Promise<Record<string, Conversation>> {
+    return await this.state.storage.get('conversations') as Record<string, Conversation> || {};
+  }
+
+  // ========== FUNCTION CALLING DEFINITIONS ==========
+
+  /**
+   * Get available functions that AI can call
+   */
+  getAvailableFunctions(): FunctionDefinition[] {
+    return [
+      {
+        name: 'add_transaction',
+        description: 'Add a new expense or income transaction to the user\'s financial records',
+        parameters: {
+          type: 'object',
+          properties: {
+            amount: {
+              type: 'number',
+              description: 'The transaction amount in dollars (positive number)'
+            },
+            description: {
+              type: 'string',
+              description: 'Brief description of the transaction (e.g., "Grocery shopping", "Monthly salary")'
+            },
+            category: {
+              type: 'string',
+              enum: ['food', 'transportation', 'housing', 'entertainment', 'shopping', 'healthcare', 'other'],
+              description: 'The spending category'
+            },
+            type: {
+              type: 'string',
+              enum: ['expense', 'income'],
+              description: 'Whether this is an expense or income'
+            },
+            date: {
+              type: 'string',
+              description: 'Transaction date in YYYY-MM-DD format (optional, defaults to today)'
+            }
+          },
+          required: ['amount', 'description', 'category', 'type']
+        }
+      },
+      {
+        name: 'set_budget',
+        description: 'Set or update the monthly budget limit for a specific spending category',
+        parameters: {
+          type: 'object',
+          properties: {
+            category: {
+              type: 'string',
+              enum: ['food', 'transportation', 'housing', 'entertainment', 'shopping', 'healthcare', 'other'],
+              description: 'The category to set the budget for'
+            },
+            amount: {
+              type: 'number',
+              description: 'The monthly budget limit in dollars'
+            }
+          },
+          required: ['category', 'amount']
+        }
+      },
+      {
+        name: 'get_spending_summary',
+        description: 'Get detailed spending information for a specific category or time period',
+        parameters: {
+          type: 'object',
+          properties: {
+            category: {
+              type: 'string',
+              enum: ['food', 'transportation', 'housing', 'entertainment', 'shopping', 'healthcare', 'other', 'all'],
+              description: 'The category to analyze, or "all" for all categories'
+            },
+            month: {
+              type: 'string',
+              description: 'Month name (e.g., "October", "November") or "current" for current month'
+            }
+          },
+          required: []
+        }
+      },
+      {
+        name: 'get_budget_status',
+        description: 'Check budget status across all categories to see if user is over/under budget',
+        parameters: {
+          type: 'object',
+          properties: {},
+          required: []
+        }
+      },
+      {
+        name: 'delete_transaction',
+        description: 'Delete a specific transaction by its description or recent transaction',
+        parameters: {
+          type: 'object',
+          properties: {
+            description: {
+              type: 'string',
+              description: 'The description of the transaction to delete'
+            }
+          },
+          required: ['description']
+        }
+      }
+    ];
+  }
+
+  // ========== FUNCTION CALL HANDLERS ==========
+
+  /**
+   * Execute a function call requested by the AI
+   */
+  async executeFunction(functionCall: FunctionCall): Promise<FunctionResult> {
+    const { name, arguments: argsStr } = functionCall;
+
+    try {
+      const args = JSON.parse(argsStr);
+
+      switch (name) {
+        case 'add_transaction':
+          return await this.handleAddTransaction(args);
+
+        case 'set_budget':
+          return await this.handleSetBudget(args);
+
+        case 'get_spending_summary':
+          return await this.handleGetSpendingSummary(args);
+
+        case 'get_budget_status':
+          return await this.handleGetBudgetStatus();
+
+        case 'delete_transaction':
+          return await this.handleDeleteTransaction(args);
+
+        default:
+          return {
+            success: false,
+            message: `Unknown function: ${name}`
+          };
+      }
+    } catch (error) {
+      console.error(`Error executing function ${name}:`, error);
+      return {
+        success: false,
+        message: `Error executing ${name}: ${error}`
+      };
+    }
+  }
+
+  /**
+   * Handler: Add transaction
+   */
+  private async handleAddTransaction(args: any): Promise<FunctionResult> {
+    const { amount, description, category, type, date } = args;
+
+    const transactionDate = date || new Date().toISOString().slice(0, 10);
+    const transaction = {
+      id: crypto.randomUUID(),
+      amount: parseFloat(amount),
+      description,
+      category,
+      type,
+      date: transactionDate,
+      timestamp: new Date(transactionDate + 'T12:00:00').getTime()
+    };
+
+    const transactions = await this.state.storage.get('transactions') as any[] || [];
+    transactions.push(transaction);
+    await this.state.storage.put('transactions', transactions);
+
+    return {
+      success: true,
+      data: transaction,
+      message: `Added ${type} of $${amount} for "${description}" in ${category} category`,
+      action: `${type}_added`
+    };
+  }
+
+  /**
+   * Handler: Set budget
+   */
+  private async handleSetBudget(args: any): Promise<FunctionResult> {
+    const { category, amount } = args;
+
+    const budgets = await this.state.storage.get('budgets') as Record<string, number> || {};
+    const oldBudget = budgets[category] || 0;
+    budgets[category] = parseFloat(amount);
+    await this.state.storage.put('budgets', budgets);
+
+    return {
+      success: true,
+      data: { category, amount, oldBudget },
+      message: `Budget for ${category} ${oldBudget > 0 ? `updated from $${oldBudget} to` : 'set to'} $${amount}/month`
+    };
+  }
+
+  /**
+   * Handler: Get spending summary
+   */
+  private async handleGetSpendingSummary(args: any): Promise<FunctionResult> {
+    const { category, month } = args;
+    const transactions = await this.state.storage.get('transactions') as any[] || [];
+
+    let filtered = transactions.filter(t => t.type === 'expense');
+
+    // Filter by category if specified
+    if (category && category !== 'all') {
+      filtered = filtered.filter(t => t.category === category);
+    }
+
+    // Filter by month if specified
+    if (month && month !== 'current') {
+      const monthMap: Record<string, number> = {
+        january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
+        july: 6, august: 7, september: 8, october: 9, november: 10, december: 11
+      };
+      const targetMonth = monthMap[month.toLowerCase()];
+      if (targetMonth !== undefined) {
+        const currentYear = new Date().getFullYear();
+        filtered = filtered.filter(t => {
+          if (!t.date) return false;
+          const [year, m] = t.date.split('-');
+          return parseInt(year) === currentYear && parseInt(m) - 1 === targetMonth;
+        });
+      }
+    }
+
+    const total = filtered.reduce((sum, t) => sum + t.amount, 0);
+    const count = filtered.length;
+
+    // Get category breakdown
+    const breakdown: Record<string, number> = {};
+    filtered.forEach(t => {
+      breakdown[t.category] = (breakdown[t.category] || 0) + t.amount;
+    });
+
+    return {
+      success: true,
+      data: {
+        total,
+        count,
+        category: category || 'all',
+        month: month || 'all time',
+        breakdown,
+        transactions: filtered.slice(-5) // Last 5 transactions
+      },
+      message: `Found ${count} transaction(s) totaling $${total.toFixed(2)}`
+    };
+  }
+
+  /**
+   * Handler: Get budget status
+   */
+  private async handleGetBudgetStatus(): Promise<FunctionResult> {
+    const transactions = await this.state.storage.get('transactions') as any[] || [];
+    const budgets = await this.state.storage.get('budgets') as Record<string, number> || {};
+
+    // Calculate current month spending by category
+    const now = new Date();
+    const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    const monthlySpending: Record<string, number> = {};
+    transactions
+      .filter(t => t.type === 'expense' && t.date && t.date.startsWith(currentYearMonth))
+      .forEach(t => {
+        monthlySpending[t.category] = (monthlySpending[t.category] || 0) + t.amount;
+      });
+
+    // Compare with budgets
+    const status: Record<string, any> = {};
+    const overBudget: string[] = [];
+    const underBudget: string[] = [];
+
+    for (const [category, budget] of Object.entries(budgets)) {
+      const spent = monthlySpending[category] || 0;
+      const percentage = budget > 0 ? (spent / budget) * 100 : 0;
+      const remaining = budget - spent;
+
+      status[category] = {
+        budget,
+        spent,
+        remaining,
+        percentage: percentage.toFixed(1),
+        status: spent > budget ? 'over' : spent > budget * 0.9 ? 'warning' : 'good'
+      };
+
+      if (spent > budget) {
+        overBudget.push(category);
+      } else if (spent < budget * 0.8) {
+        underBudget.push(category);
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        status,
+        overBudget,
+        underBudget,
+        totalBudget: Object.values(budgets).reduce((sum, b) => sum + b, 0),
+        totalSpent: Object.values(monthlySpending).reduce((sum, s) => sum + s, 0)
+      },
+      message: `Budget status: ${overBudget.length} over budget, ${underBudget.length} under budget`
+    };
+  }
+
+  /**
+   * Handler: Delete transaction
+   */
+  private async handleDeleteTransaction(args: any): Promise<FunctionResult> {
+    const { description } = args;
+    const transactions = await this.state.storage.get('transactions') as any[] || [];
+
+    // Find matching transaction (case-insensitive)
+    const index = transactions.findIndex(t =>
+      t.description.toLowerCase().includes(description.toLowerCase())
+    );
+
+    if (index === -1) {
+      return {
+        success: false,
+        message: `No transaction found matching "${description}"`
+      };
+    }
+
+    const deleted = transactions.splice(index, 1)[0];
+    await this.state.storage.put('transactions', transactions);
+
+    return {
+      success: true,
+      data: deleted,
+      message: `Deleted transaction: ${deleted.description} ($${deleted.amount})`
+    };
   }
 
   async handleResetData(): Promise<Response> {
@@ -28,9 +480,12 @@ export class APIHandlers {
 
   async getAIAdvice(request: Request): Promise<Response> {
     try {
-      const body = await request.json() as { message: string };
-      const { message } = body;
-      
+      const body = await request.json() as { message: string; conversationId?: string };
+      const { message, conversationId = 'default' } = body;
+
+      // Save user message to conversation history
+      await this.saveMessage('user', message, conversationId);
+
       // Get current financial data to provide context to AI
       const transactions = await this.state.storage.get('transactions') as any[] || [];
       
@@ -67,7 +522,7 @@ export class APIHandlers {
       };
       
       // Check for specific financial questions that need precise answers
-      const dayQuestion = message.match(/which day.*spend.*(most|least|highest|lowest)|what day.*(most|least).*spending|(highest|lowest).*spending.*day/i);
+      const dayQuestion = message.match(/which day.*spend.*(most|least|highest|lowest)|what day.*(most|least).*spending|(highest|lowest).*spending.*day|least.*money.*day/i);
       const monthQuestion = message.match(/how much.*(did|do|have).*spend.*(in|during|for)\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)/i);
       const balanceQuestion = message.match(/what.*my.*balance|how much.*have|current.*balance/i);
       const categoryQuestion = message.match(/how much.*(did|do|have).*spend.*on\s+(\w+)/i);
@@ -81,15 +536,24 @@ export class APIHandlers {
         if (dailySpending.found) {
           const day = isLeast ? dailySpending.lowestDay : dailySpending.highestDay;
           const superlative = isLeast ? 'lowest' : 'highest';
+          const responseText = `${day.date} was your ${superlative} spending day${monthMatch ? ` in ${monthMatch[1]}` : ''} with $${day.amount.toFixed(2)} spent across ${day.transactionCount} transaction${day.transactionCount > 1 ? 's' : ''}. ${day.topCategory ? `Most of it went to ${day.topCategory.category} ($${day.topCategory.amount.toFixed(2)}).` : ''}`;
+
+          // Save assistant response
+          await this.saveMessage('assistant', responseText, conversationId);
 
           return new Response(JSON.stringify({
-            response: `${day.date} was your ${superlative} spending day${monthMatch ? ` in ${monthMatch[1]}` : ''} with $${day.amount.toFixed(2)} spent across ${day.transactionCount} transaction${day.transactionCount > 1 ? 's' : ''}. ${day.topCategory ? `Most of it went to ${day.topCategory.category} ($${day.topCategory.amount.toFixed(2)}).` : ''}`
+            response: responseText
           }), {
             headers: { 'Content-Type': 'application/json' }
           });
         } else {
+          const responseText = `I couldn't find daily spending data${monthMatch ? ` for ${monthMatch[1]}` : ''}. Your transactions show total spending of $${financialContext.totalExpenses.toFixed(2)}.`;
+
+          // Save assistant response
+          await this.saveMessage('assistant', responseText, conversationId);
+
           return new Response(JSON.stringify({
-            response: `I couldn't find daily spending data${monthMatch ? ` for ${monthMatch[1]}` : ''}. Your transactions show total spending of $${financialContext.totalExpenses.toFixed(2)}.`
+            response: responseText
           }), {
             headers: { 'Content-Type': 'application/json' }
           });
@@ -100,16 +564,20 @@ export class APIHandlers {
       if (monthQuestion) {
         const monthName = monthQuestion[3].toLowerCase();
         const monthlySpending = this.calculateMonthlySpending(transactions, monthName);
-        
+
         if (monthlySpending.found) {
+          const responseText = `In ${monthlySpending.monthName}, you spent $${monthlySpending.amount.toFixed(2)} across ${monthlySpending.transactionCount} transactions. ${monthlySpending.topCategory ? `Your highest spending was in ${monthlySpending.topCategory.category} ($${monthlySpending.topCategory.amount.toFixed(2)}).` : ''}`;
+          await this.saveMessage('assistant', responseText, conversationId);
           return new Response(JSON.stringify({
-            response: `In ${monthlySpending.monthName}, you spent $${monthlySpending.amount.toFixed(2)} across ${monthlySpending.transactionCount} transactions. ${monthlySpending.topCategory ? `Your highest spending was in ${monthlySpending.topCategory.category} ($${monthlySpending.topCategory.amount.toFixed(2)}).` : ''}`
+            response: responseText
           }), {
             headers: { 'Content-Type': 'application/json' }
           });
         } else {
+          const responseText = `I don't have spending data for ${monthName}. Your available data shows spending in the current month ($${financialContext.totalExpenses.toFixed(2)}).`;
+          await this.saveMessage('assistant', responseText, conversationId);
           return new Response(JSON.stringify({
-            response: `I don't have spending data for ${monthName}. Your available data shows spending in the current month ($${financialContext.totalExpenses.toFixed(2)}).`
+            response: responseText
           }), {
             headers: { 'Content-Type': 'application/json' }
           });
@@ -118,8 +586,10 @@ export class APIHandlers {
 
       // Handle balance questions with DETERMINISTIC calculation
       if (balanceQuestion) {
+        const responseText = `Your current balance is $${financialContext.balance.toFixed(2)}. You have $${financialContext.totalIncome.toFixed(2)} in total income and $${financialContext.totalExpenses.toFixed(2)} in expenses across ${financialContext.transactionCount} transactions.`;
+        await this.saveMessage('assistant', responseText, conversationId);
         return new Response(JSON.stringify({
-          response: `Your current balance is $${financialContext.balance.toFixed(2)}. You have $${financialContext.totalIncome.toFixed(2)} in total income and $${financialContext.totalExpenses.toFixed(2)} in expenses across ${financialContext.transactionCount} transactions.`
+          response: responseText
         }), {
           headers: { 'Content-Type': 'application/json' }
         });
@@ -129,60 +599,34 @@ export class APIHandlers {
       if (categoryQuestion) {
         const category = categoryQuestion[2].toLowerCase();
         const categoryAmount = financialContext.categoryBreakdown[category] || 0;
-        
+
         if (categoryAmount > 0) {
           const percentage = ((categoryAmount / financialContext.totalExpenses) * 100).toFixed(1);
+          const responseText = `You've spent $${categoryAmount.toFixed(2)} on ${category}, which is ${percentage}% of your total expenses ($${financialContext.totalExpenses.toFixed(2)}).`;
+          await this.saveMessage('assistant', responseText, conversationId);
           return new Response(JSON.stringify({
-            response: `You've spent $${categoryAmount.toFixed(2)} on ${category}, which is ${percentage}% of your total expenses ($${financialContext.totalExpenses.toFixed(2)}).`
+            response: responseText
           }), {
             headers: { 'Content-Type': 'application/json' }
           });
         } else {
+          const responseText = `You haven't recorded any spending in the ${category} category yet. Your current spending categories are: ${Object.keys(financialContext.categoryBreakdown).join(', ')}.`;
+          await this.saveMessage('assistant', responseText, conversationId);
           return new Response(JSON.stringify({
-            response: `You haven't recorded any spending in the ${category} category yet. Your current spending categories are: ${Object.keys(financialContext.categoryBreakdown).join(', ')}.`
+            response: responseText
           }), {
             headers: { 'Content-Type': 'application/json' }
           });
         }
       }
 
-      // Check if this is a transaction request (keep this separate)
-      const isQuestion = /^(how much|what|when|where|why|which|who|can you|could you|tell me|show me)/i.test(message.trim());
-      const transactionIntent = !isQuestion ? await this.parseTransactionIntent(message) : null;
-
-      if (transactionIntent && transactionIntent.isTransaction) {
-        try {
-          const transactionDate = transactionIntent.date || new Date().toISOString().slice(0, 10);
-          const transaction = {
-            id: crypto.randomUUID(),
-            amount: transactionIntent.amount!,
-            description: transactionIntent.description!,
-            category: transactionIntent.category!,
-            type: transactionIntent.type as 'expense' | 'income',
-            date: transactionDate,
-            timestamp: new Date(transactionDate + 'T12:00:00').getTime()
-          };
-
-          const existingTransactions = await this.state.storage.get('transactions') as any[] || [];
-          existingTransactions.push(transaction);
-          await this.state.storage.put('transactions', existingTransactions);
-
-          const typeLabel = transactionIntent.type === 'income' ? 'income' : `${transactionIntent.category} expense`;
-          return new Response(JSON.stringify({
-            response: `✅ Successfully added $${transactionIntent.amount} ${typeLabel} for "${transactionIntent.description}". Your ${transactionIntent.type} has been tracked!`,
-            action: `${transactionIntent.type}_added`,
-            transaction
-          }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        } catch (error) {
-          console.error('Error adding transaction via AI:', error);
-        }
-      }
+      // LEGACY TRANSACTION PARSER DISABLED - Function calling now handles all actions
+      // The old parseTransactionIntent was conflicting with function calling
+      // Now we rely entirely on the LLM with function definitions to handle actions
 
       // ========== PURE LLM APPROACH ==========
       // Let the AI figure out what the user is asking and compute the answer
-      
+
       // Prepare detailed financial data for the LLM
       const monthlyData = this.calculateMonthlyBreakdownForAllMonths(transactions);
       const dailySpendingData = this.calculateDailySpendingSummary(transactions); // Pre-calculate daily spending
@@ -191,15 +635,104 @@ export class APIHandlers {
         .map(([cat, amt]) => `${cat}: $${amt.toFixed(2)}`)
         .join(', ');
 
-      // Build a comprehensive system prompt with ALL financial data
-      const systemPrompt = `You are an intelligent financial assistant with complete access to the user's financial data. Your job is to answer their questions accurately using ONLY the provided data.
+      // ========== RAG ENHANCEMENT ==========
+      // Retrieve relevant context from knowledge base and transaction history
+      let ragContext;
+      try {
+        const vectorDB = createVectorDB(this.env);
+        ragContext = await retrieveContext(
+          message,
+          transactions,
+          this.env.AI,
+          vectorDB
+        );
+      } catch (ragError) {
+        console.log('RAG retrieval skipped:', ragError);
+        ragContext = { knowledgeEntries: [], similarTransactions: [] };
+      }
+
+      const financialSummary = {
+        balance,
+        income: totalIncome,
+        expenses: totalExpenses,
+        categoryBreakdown
+      };
+
+      // Build enhanced prompt with RAG context (for informational queries)
+      const ragEnhancedPrompt = buildRAGPrompt(message, ragContext, financialSummary);
+
+      // Get conversation history as proper message objects (last 5 messages for context)
+      const conversationHistory = await this.loadConversation(conversationId);
+      const recentMessages = conversationHistory.slice(-5);
+
+      // Get available functions for function calling
+      const functions = this.getAvailableFunctions();
+      const functionDescriptions = functions.map(f =>
+        `- ${f.name}: ${f.description}`
+      ).join('\n');
+
+      // Build a comprehensive system prompt with ALL financial data, conversation history, AND function calling
+      const systemPrompt = `You are an intelligent financial assistant with complete access to the user's financial data AND the ability to take actions.
 
 CRITICAL RULES:
 1. NEVER make up numbers or guess - use ONLY the data provided below
-2. Be specific with numbers - always include dollar amounts and transaction counts
-3. If you don't have data for a specific period, say so clearly
-4. Keep responses concise (under 150 words) but informative
-5. For daily spending questions, use the DAILY SPENDING BREAKDOWN section
+2. NEVER do math calculations yourself - all totals are pre-calculated for you
+3. Be specific with numbers - always include dollar amounts and transaction counts
+4. If you don't have data for a specific period, say so clearly
+5. Keep responses concise (under 100 words) and focused on the current question
+6. DO NOT repeat information from previous messages
+7. Answer ONLY what the user is currently asking
+8. Use conversation history ONLY for context, not to repeat responses
+
+AVAILABLE ACTIONS - Call these functions when the user wants to DO something:
+${functionDescriptions}
+
+MULTI-STEP ACTIONS:
+You can call MULTIPLE functions in sequence for complex requests. Each function call should be on its own line.
+
+WHEN TO USE FUNCTION CALLS:
+- User wants to SET/UPDATE/CHANGE a budget → use set_budget
+- User wants to ADD/RECORD an expense or income → use add_transaction
+- User wants to DELETE/REMOVE a transaction → use delete_transaction
+- User wants to CHECK budget status → use get_budget_status
+- User wants to ANALYZE spending → use get_spending_summary
+
+FORMAT for function calls (MUST match exactly):
+FUNCTION_CALL: {"name": "function_name", "arguments": {"param": "value"}}
+
+SINGLE-STEP EXAMPLES:
+User: "Set my food budget to $500"
+→ FUNCTION_CALL: {"name": "set_budget", "arguments": {"category": "food", "amount": 500}}
+
+User: "I spent $50 on groceries"
+→ FUNCTION_CALL: {"name": "add_transaction", "arguments": {"amount": 50, "description": "groceries", "category": "food", "type": "expense"}}
+
+MULTI-STEP EXAMPLES:
+User: "I spent $50 on groceries. Am I over budget on food?"
+→ FUNCTION_CALL: {"name": "add_transaction", "arguments": {"amount": 50, "description": "groceries", "category": "food", "type": "expense"}}
+→ FUNCTION_CALL: {"name": "get_budget_status", "arguments": {}}
+
+User: "Add $100 gas, $50 food, and $200 shopping"
+→ FUNCTION_CALL: {"name": "add_transaction", "arguments": {"amount": 100, "description": "gas", "category": "transportation", "type": "expense"}}
+→ FUNCTION_CALL: {"name": "add_transaction", "arguments": {"amount": 50, "description": "food", "category": "food", "type": "expense"}}
+→ FUNCTION_CALL: {"name": "add_transaction", "arguments": {"amount": 200, "description": "shopping", "category": "shopping", "type": "expense"}}
+
+User: "Set food budget to $600, entertainment to $250"
+→ FUNCTION_CALL: {"name": "set_budget", "arguments": {"category": "food", "amount": 600}}
+→ FUNCTION_CALL: {"name": "set_budget", "arguments": {"category": "entertainment", "amount": 250}}
+
+For INFORMATIONAL questions (no action needed), respond normally with text.
+
+${ragContext.knowledgeEntries && ragContext.knowledgeEntries.length > 0 ? `
+RELEVANT FINANCIAL KNOWLEDGE BASE:
+━━━━━━━━━━━━━━━━━━━━
+${ragContext.knowledgeEntries.map((entry, idx) =>
+  `${idx + 1}. ${entry.category.toUpperCase()}:\n${entry.content}\n`
+).join('\n')}
+━━━━━━━━━━━━━━━━━━━━
+
+Use the above knowledge base articles to provide expert financial advice when relevant.
+` : ''}
 
 USER'S FINANCIAL DATA:
 ━━━━━━━━━━━━━━━━━━━━
@@ -219,16 +752,29 @@ ${dailySpendingData}
 
 ━━━━━━━━━━━━━━━━━━━━
 
-Now answer the user's question using ONLY the data above. Be precise and cite specific numbers.`;
+Now answer the user's question using ONLY the data above OR call a function to perform an action. Be precise and cite specific numbers.`;
 
       try {
+        // Build messages array with conversation history
+        const messages: any[] = [
+          { role: 'system', content: systemPrompt }
+        ];
+
+        // Add recent conversation messages for context
+        for (const msg of recentMessages) {
+          messages.push({
+            role: msg.role,
+            content: msg.content
+          });
+        }
+
+        // Add current user message
+        messages.push({ role: 'user', content: message });
+
         // Add timeout to prevent infinite waiting
         const response = await Promise.race([
           this.env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: message }
-            ],
+            messages: messages,
             max_tokens: 512 // Reduced since we're providing pre-calculated data
           }),
           new Promise((_, reject) => 
@@ -238,10 +784,168 @@ Now answer the user's question using ONLY the data above. Be precise and cite sp
 
         const aiResponse = response as any;
         let responseText = aiResponse?.response || '';
-        
+
         if (!responseText) {
           responseText = `I have access to your financial data: Balance is $${balance.toFixed(2)}, with $${totalExpenses.toFixed(2)} in total expenses across ${transactions.length} transactions. What would you like to know?`;
         }
+
+        // Check if AI wants to call function(s) - MULTI-STEP SUPPORT
+        // Extract ALL FUNCTION_CALL patterns from the response
+        const functionCallPattern = /FUNCTION_CALL:\s*(\{[^}]*\{[^}]*\}[^}]*\}|\{[^}]*\})/gi;
+        const functionCallMatches: RegExpMatchArray[] = Array.from(responseText.matchAll(functionCallPattern)) as RegExpMatchArray[];
+
+        if (functionCallMatches.length > 0) {
+          try {
+            const functionCalls: FunctionCall[] = [];
+
+            // Parse all function calls
+            for (const match of functionCallMatches) {
+              let jsonStr = match[1];
+
+              // Find the complete JSON object by counting braces
+              let braceCount = 0;
+              let endIndex = 0;
+              for (let i = 0; i < jsonStr.length; i++) {
+                if (jsonStr[i] === '{') braceCount++;
+                if (jsonStr[i] === '}') braceCount--;
+                if (braceCount === 0) {
+                  endIndex = i + 1;
+                  break;
+                }
+              }
+
+              if (endIndex > 0) {
+                jsonStr = jsonStr.substring(0, endIndex);
+              }
+
+              const parsedCall = JSON.parse(jsonStr);
+
+              // Convert arguments to string if it's an object
+              const functionCall: FunctionCall = {
+                name: parsedCall.name,
+                arguments: typeof parsedCall.arguments === 'string'
+                  ? parsedCall.arguments
+                  : JSON.stringify(parsedCall.arguments)
+              };
+
+              functionCalls.push(functionCall);
+            }
+
+            console.log(`[Multi-Step] AI wants to execute ${functionCalls.length} function(s):`);
+            functionCalls.forEach((fc, i) => {
+              console.log(`  ${i + 1}. ${fc.name}`);
+            });
+
+            // Execute all functions in sequence
+            const functionResults: FunctionResult[] = [];
+            for (let i = 0; i < functionCalls.length; i++) {
+              const fc = functionCalls[i];
+              console.log(`[Multi-Step] Executing step ${i + 1}/${functionCalls.length}: ${fc.name}`);
+
+              const result = await this.executeFunction(fc);
+              functionResults.push(result);
+
+              console.log(`[Multi-Step] Step ${i + 1} result:`, result.success ? '✅ Success' : '❌ Failed', `-`, result.message);
+            }
+
+            // Build summary of all results with calculated totals
+            const addedTransactions = functionResults
+              .filter((r, i) => functionCalls[i].name === 'add_transaction' && r.success)
+              .map(r => r.data);
+
+            let calculatedSummary = '';
+            if (addedTransactions.length > 0) {
+              // Group by category and calculate totals
+              const byCategory: Record<string, number> = {};
+              let grandTotal = 0;
+
+              addedTransactions.forEach((t: any) => {
+                byCategory[t.category] = (byCategory[t.category] || 0) + t.amount;
+                grandTotal += t.amount;
+              });
+
+              calculatedSummary = `\n\nCALCULATED TOTALS (use these exact numbers):
+- Total transactions added: ${addedTransactions.length}
+- Grand total spent: $${grandTotal.toFixed(2)}
+- By category: ${Object.entries(byCategory).map(([cat, amt]) => `${cat} $${amt.toFixed(2)}`).join(', ')}`;
+            }
+
+            const resultsSummary = functionResults.map((result, i) => {
+              const fc = functionCalls[i];
+              return `${i + 1}. ${fc.name}: ${result.success ? 'Success' : 'Failed'} - ${result.message}`;
+            }).join('\n');
+
+            // ========== RECALCULATE BALANCE AFTER TRANSACTIONS ==========
+            // The balance at the start of this function is now stale
+            // Recalculate with the newly added transactions
+            const updatedTransactions = await this.state.storage.get('transactions') as any[] || [];
+            const updatedTotalIncome = updatedTransactions
+              .filter(t => t.type === 'income')
+              .reduce((sum, t) => sum + t.amount, 0);
+            const updatedTotalExpenses = updatedTransactions
+              .filter(t => t.type === 'expense')
+              .reduce((sum, t) => sum + t.amount, 0);
+            const updatedBalance = updatedTotalIncome - updatedTotalExpenses;
+
+            // Add updated financial context to the summary
+            const updatedFinancialContext = `\n\nUPDATED FINANCIAL STATUS (use these exact numbers):
+- Current Balance: $${updatedBalance.toFixed(2)}
+- Total Income: $${updatedTotalIncome.toFixed(2)}
+- Total Expenses: $${updatedTotalExpenses.toFixed(2)}
+- Total Transactions: ${updatedTransactions.length}`;
+
+            // Get final natural language response from AI
+            const finalResponse = await this.env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+              messages: [
+                {
+                  role: 'system',
+                  content: `You are a financial assistant. Provide a brief confirmation of what was done.
+
+CRITICAL RULES:
+1. ONLY confirm what the user asked you to do - don't volunteer extra information
+2. If they asked to log expenses, just confirm the transactions were added with the total
+3. If they asked about balance, ONLY tell them the balance
+4. DO NOT include balance, income, or expense info unless directly asked
+5. Use ONLY the exact numbers provided - NEVER calculate yourself
+6. Keep response under 50 words
+7. Be concise and focused`
+                },
+                { role: 'user', content: message },
+                {
+                  role: 'user',
+                  content: `Executed ${functionCalls.length} function(s):\n${resultsSummary}${calculatedSummary}${updatedFinancialContext}\n\nProvide a brief confirmation of what was done. Answer ONLY what was asked - do not volunteer balance or financial status unless specifically requested.`
+                }
+              ],
+              max_tokens: 150
+            });
+
+            responseText = finalResponse?.response || functionResults.map(r => r.message).join(' ');
+
+            // Save assistant response
+            await this.saveMessage('assistant', responseText, conversationId);
+
+            // Determine if any action was taken (for dashboard refresh)
+            const actionTaken = functionResults.some(r => r.action);
+
+            // Return with multi-step info
+            return new Response(JSON.stringify({
+              response: responseText,
+              action: actionTaken ? 'multi_step_completed' : undefined,
+              functionsCalled: functionCalls.map(fc => fc.name),
+              functionResults: functionResults,
+              stepsExecuted: functionCalls.length
+            }), {
+              headers: { 'Content-Type': 'application/json' }
+            });
+
+          } catch (parseError) {
+            console.error('[Multi-Step] Parse error:', parseError);
+            // If function parsing fails, just return the original response
+          }
+        }
+
+        // Save assistant response to conversation history
+        await this.saveMessage('assistant', responseText, conversationId);
 
         return new Response(JSON.stringify({
           response: responseText
@@ -250,16 +954,26 @@ Now answer the user's question using ONLY the data above. Be precise and cite sp
         });
       } catch (aiError) {
         console.error('AI Error:', aiError);
+        const errorResponse = `I have access to your financial data but encountered an issue. Your current balance is $${balance.toFixed(2)} with $${totalExpenses.toFixed(2)} in expenses. Please try rephrasing your question.`;
+        await this.saveMessage('assistant', errorResponse, conversationId);
         return new Response(JSON.stringify({
-          response: `I have access to your financial data but encountered an issue. Your current balance is $${balance.toFixed(2)} with $${totalExpenses.toFixed(2)} in expenses. Please try rephrasing your question.`
+          response: errorResponse
         }), {
           headers: { 'Content-Type': 'application/json' }
         });
       }
     } catch (error) {
       console.error('getAIAdvice error:', error);
+      const fallbackResponse = 'I can help you manage your finances! Try asking about budgeting, saving, or investment strategies.';
+      try {
+        // Try to get conversationId from request if available
+        const body = await request.clone().json() as { conversationId?: string };
+        await this.saveMessage('assistant', fallbackResponse, body.conversationId || 'default');
+      } catch {
+        // If we can't parse the request, just continue
+      }
       return new Response(JSON.stringify({
-        response: 'I can help you manage your finances! Try asking about budgeting, saving, or investment strategies.'
+        response: fallbackResponse
       }), {
         headers: { 'Content-Type': 'application/json' }
       });
@@ -415,6 +1129,8 @@ Now answer the user's question using ONLY the data above. Be precise and cite sp
   private calculateDailySpending(transactions: any[], monthName: string | null) {
     let filteredTransactions = transactions.filter(t => t.type === 'expense');
     
+    console.log(`[Daily Spending] Total expense transactions: ${filteredTransactions.length}`);
+    
     // If a month is specified, filter by that month
     if (monthName) {
       const monthMap: { [key: string]: number } = {
@@ -425,6 +1141,7 @@ Now answer the user's question using ONLY the data above. Be precise and cite sp
       };
       const targetMonth = monthMap[monthName.toLowerCase()];
       const currentYear = new Date().getFullYear();
+      console.log(`[Daily Spending] Filtering for month: ${monthName} (index: ${targetMonth}, year: ${currentYear})`);
       if (targetMonth !== undefined) {
         filteredTransactions = filteredTransactions.filter(t => {
           // Use date string to avoid timezone issues
@@ -434,6 +1151,7 @@ Now answer the user's question using ONLY the data above. Be precise and cite sp
           const txMonth = parseInt(dateParts[1]) - 1; // Convert to 0-indexed
           return txMonth === targetMonth && txYear === currentYear;
         });
+        console.log(`[Daily Spending] After month filter: ${filteredTransactions.length} transactions`);
       }
     }
 
@@ -451,6 +1169,11 @@ Now answer the user's question using ONLY the data above. Be precise and cite sp
       }
       dailyTotals[date].amount += t.amount;
       dailyTotals[date].transactions.push(t);
+    });
+    
+    console.log(`[Daily Spending] Grouped into ${Object.keys(dailyTotals).length} days`);
+    Object.entries(dailyTotals).forEach(([date, data]) => {
+      console.log(`  ${date}: $${data.amount.toFixed(2)} (${data.transactions.length} txns) - ${data.transactions.map(t => `${t.description} ($${t.amount})`).join(', ')}`);
     });
 
     // Find the day with highest and lowest spending
@@ -498,6 +1221,9 @@ Now answer the user's question using ONLY the data above. Be precise and cite sp
         lowestDay = dayInfo;
       }
     });
+    
+    console.log(`[Daily Spending] Highest: ${highestDay?.date} ($${highestDay?.amount.toFixed(2)})`);
+    console.log(`[Daily Spending] Lowest: ${lowestDay?.date} ($${lowestDay?.amount.toFixed(2)})`);
 
     return {
       found: true,
@@ -718,7 +1444,17 @@ Respond with ONLY the JSON object, no other text.`;
       const existingTransactions = await this.state.storage.get('transactions') as any[] || [];
       existingTransactions.push(transaction);
       await this.state.storage.put('transactions', existingTransactions);
-      
+
+      // ========== RAG ENHANCEMENT ==========
+      // Index transaction for semantic search
+      try {
+        const vectorDB = createVectorDB(this.env);
+        await indexTransaction(transaction, this.env.AI, vectorDB);
+      } catch (indexError) {
+        console.log('Transaction indexing skipped:', indexError);
+        // Don't fail the whole operation if indexing fails
+      }
+
       return new Response(JSON.stringify({
         success: true,
         transaction,
@@ -883,6 +1619,60 @@ Respond with ONLY the JSON object, no other text.`;
     }
   }
 
+  // ===== Conversation Management Endpoints =====
+  async getConversationHistory(request: Request): Promise<Response> {
+    try {
+      const url = new URL(request.url);
+      const conversationId = url.searchParams.get('conversationId') || 'default';
+
+      const messages = await this.loadConversation(conversationId);
+
+      return new Response(JSON.stringify({
+        success: true,
+        conversationId,
+        messages,
+        count: messages.length
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (error) {
+      console.error('getConversationHistory error:', error);
+      return new Response(JSON.stringify({
+        success: false,
+        error: 'Failed to load conversation history',
+        messages: []
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  }
+
+  async clearConversationHistory(request: Request): Promise<Response> {
+    try {
+      const body = await request.json() as { conversationId?: string };
+      const conversationId = body?.conversationId || 'default';
+
+      await this.clearConversation(conversationId);
+
+      return new Response(JSON.stringify({
+        success: true,
+        message: `Conversation history cleared for ${conversationId}`
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (error) {
+      console.error('clearConversationHistory error:', error);
+      return new Response(JSON.stringify({
+        success: false,
+        error: 'Failed to clear conversation history'
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  }
+
   // ===== LLM Receipt Scanner =====
   async scanReceiptLLM(request: Request): Promise<Response> {
     try {
@@ -916,6 +1706,35 @@ Respond with ONLY the JSON object, no other text.`;
       }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  }
+
+  /**
+   * Initialize knowledge base with financial articles
+   * Works with both ChromaDB and Vectorize
+   */
+  async initializeKnowledgeBase(): Promise<Response> {
+    try {
+      const vectorDB = createVectorDB(this.env);
+      const dbName = getVectorDBName(this.env);
+
+      await initializeKnowledgeBase(this.env.AI, vectorDB);
+
+      return new Response(JSON.stringify({
+        success: true,
+        message: `Knowledge base initialized with 12 financial articles using ${dbName}`
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (error) {
+      console.error('Knowledge base init error:', error);
+      return new Response(JSON.stringify({
+        success: false,
+        message: String(error)
+      }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 500
       });
     }
   }
