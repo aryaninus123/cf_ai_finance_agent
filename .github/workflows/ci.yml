@@ -116,11 +116,13 @@ jobs:
 
       - name: Check for secrets in code
         run: |
-          if grep -r "CLOUDFLARE_API_TOKEN\|API_KEY\|SECRET" src/ --exclude-dir=node_modules; then
-            echo "⚠️  Warning: Potential secrets found in source code"
+          # Check for hardcoded secrets (not env variable references)
+          # Exclude lines with env., process.env, ENVIRONMENT, or interface definitions
+          if grep -rE "(token|key|secret)\s*=\s*['\"][a-zA-Z0-9]{20,}" src/ --exclude-dir=node_modules | grep -v "env\." | grep -v "process\.env" | grep -v "interface" | grep -v "ENVIRONMENT"; then
+            echo "⚠️  Warning: Potential hardcoded secrets found"
             exit 1
           else
-            echo "✓ No obvious secrets found in source code"
+            echo "✓ No hardcoded secrets found"
           fi
 
   # Summary job
