@@ -557,8 +557,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (window.financeApp) {
       window.financeApp.showAlert({
         type: 'success',
-        message: 'Welcome to your Personal Finance Assistant! 🎉'
+        message: "Welcome to your Personal Finance Assistant! 🎉"
       });
     }
-  }, 1000);
+  }, 1000);5
 });

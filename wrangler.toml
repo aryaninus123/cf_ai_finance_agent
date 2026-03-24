@@ -1,7 +1,10 @@
 name = "finance-agent"
 main = "src/index.ts"
-compatibility_date = "2024-09-27"
+compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./public"
 
 [ai]
 binding = "AI"
